@@ -11,7 +11,7 @@ This note captures what was validated today and the exact commands to reproduce 
 ## 1. Desktop: default-content seeder tests
 
 New feature: a fresh, empty collection is auto-seeded with the SOA Exam P sample
-questions (`pylib/anki/brainlift/examp_seed.py` → 660 cards) via
+questions (`pylib/anki/brainlift/examp_seed.py` → 437 cards) via
 `pylib/anki/brainlift/default_content.py::maybe_seed_default_deck`.
 
 Tests: `pylib/tests/test_brainlift_default_content.py`
@@ -50,7 +50,7 @@ PYTHONPATH="$(pwd)/out/pylib" ANKI_TEST_MODE=1 out/pyenv/bin/pytest \
 ### Regenerate the seed module (from the validated .apkg / SOA source)
 ```bash
 python anki-analysis/build_examp_deck.py --emit-seed
-# writes anki/pylib/anki/brainlift/examp_seed.py  (660 cards)
+# writes anki/pylib/anki/brainlift/examp_seed.py  (437 cards)
 ```
 
 ---
@@ -71,13 +71,13 @@ unzip -l out/wheels/anki-*.whl | grep 'brainlift/examp_seed.py'
 **Result (today):** `./ninja wheels` succeeded. The built
 `anki-26.5-cp310-abi3-macosx_12_0_arm64.whl` contains
 `anki/brainlift/examp_seed.py` (≈810 KB), `default_content.py`, and `exam_p.py`.
-Loading `SEED_CARDS` directly from the wheel returns **660** cards:
+Loading `SEED_CARDS` directly from the wheel returns **437** cards:
 
 | Exam P main topic | Cards |
 |---|---|
-| General Probability | 310 |
-| Univariate Random Variables | 304 |
-| Multivariate Random Variables | 46 |
+| General Probability | 229 |
+| Univariate Random Variables | 198 |
+| Multivariate Random Variables | 10 |
 
 > The full signed `.dmg` installer is built at packaging time with
 > `./tools/build-installer` (`RELEASE=2 ./ninja installer`); it was **not**
@@ -101,16 +101,17 @@ needed for the default-content feature).
 
 ---
 
-## 4. Desktop ↔ mobile sync validation (today)
+## 4. Desktop ↔ mobile sync
+
+**Conflict/merge rule (the actual behavior).** BrainLift state is stored in the
+Anki collection config and rides Anki's built-in collection sync; there is no
+custom merge — Anki's standard sync resolution applies (on divergence, a full
+sync prompts the user to keep one side; config is effectively last-writer-wins).
+All BrainLift state lives in the collection config + standard notes/cards, so it
+uses Anki's existing sync with no new transport.
 
 Validated that onboarding profile, cards, and per-topic coverage created on one
-client appear on the other after sync.
-
-**Sync-direction rule used during testing:** change on one side → **sync up** →
-switch to the other client → **sync down** → then compare. Do not edit both sides
-before syncing (avoids one-way merge conflicts). All BrainLift state lives in the
-collection config + standard notes/cards, so it uses Anki's existing sync with no
-new transport.
+client appear on the other after a normal sync.
 
 ---
 
