@@ -70,8 +70,26 @@ def _land_home(mw: AnkiQt) -> None:
     if _landed or mw.col is None:
         return
     _landed = True
-    # Defer so it runs after Anki's own startup navigation settles.
-    mw.progress.single_shot(300, lambda: open_home(mw), False)
+    # Defer so it runs after Anki's own startup navigation settles. We seed the
+    # bundled default Exam P content (if the collection is empty) just before
+    # landing, so the coverage/landing view reflects the new cards immediately.
+    mw.progress.single_shot(300, lambda: _seed_and_land(mw), False)
+
+
+def _seed_and_land(mw: AnkiQt) -> None:
+    """Seed default content (once, only if empty) then show the landing."""
+    if mw.col is not None:
+        try:
+            from anki.brainlift.default_content import maybe_seed_default_deck
+
+            added = maybe_seed_default_deck(mw.col)
+            if added:
+                # Reset so the freshly-seeded cards are visible everywhere.
+                mw.col.reset()
+        except Exception:
+            # Never let seeding block the user from reaching the landing.
+            pass
+    open_home(mw)
 
 
 # --- "Complete onboarding before first review" gate -------------------------
