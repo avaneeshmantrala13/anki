@@ -1025,6 +1025,32 @@ class Collection(DeprecatedNamesMixin):
     ) -> Sequence[stats_pb2.CardStatsResponse.StatsRevlogEntry]:
         return self._backend.get_review_logs(card_id)
 
+    def topic_mastery(
+        self,
+        topics: Sequence[tuple[str, str]],
+        mastered_threshold: float = 0.0,
+    ) -> stats_pb2.TopicMasteryResponse:
+        """BrainLift: deterministic per-topic mastery & coverage.
+
+        `topics` is a sequence of (name, search) pairs, where `search` is an
+        Anki search string identifying the cards in that topic
+        (e.g. ("Probability", "tag:ExamP::Probability")). `mastered_threshold`
+        is the current retrievability (0-1) at or above which a card counts as
+        mastered; values <= 0 fall back to the backend default (0.9).
+
+        Contains no AI: every value is derived from existing review history.
+        """
+        request = stats_pb2.TopicMasteryRequest(
+            topics=[
+                stats_pb2.TopicSearch(name=name, search=search)
+                for name, search in topics
+            ],
+            mastered_threshold=mastered_threshold,
+        )
+        return stats_pb2.TopicMasteryResponse.FromString(
+            self._backend.topic_mastery_raw(request.SerializeToString())
+        )
+
     def studied_today(self) -> str:
         return self._backend.studied_today()
 

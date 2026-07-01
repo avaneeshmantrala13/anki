@@ -16,11 +16,53 @@ service StatsService {
   rpc Graphs(GraphsRequest) returns (GraphsResponse);
   rpc GetGraphPreferences(generic.Empty) returns (GraphPreferences);
   rpc SetGraphPreferences(GraphPreferences) returns (generic.Empty);
+  // BrainLift: per-topic mastery & coverage aggregation. Deterministic
+  // (no AI); each topic is identified by an Anki search string so the engine
+  // stays generic and the Exam P syllabus mapping lives in the client.
+  rpc TopicMastery(TopicMasteryRequest) returns (TopicMasteryResponse);
 }
 
 // Implicitly includes any of the above methods that are not listed in the
 // backend service.
 service BackendStatsService {}
+
+// BrainLift Topic Mastery & Coverage ------------------------------------------
+
+message TopicMasteryRequest {
+  // The topics to evaluate. Each is identified by an Anki search string (e.g.
+  // "tag:ExamP::Probability"), so the backend never hard-codes any syllabus.
+  repeated TopicSearch topics = 1;
+  // Current retrievability (0-1) at or above which a card counts as
+  // "mastered". Values <= 0 fall back to a default of 0.9.
+  float mastered_threshold = 2;
+}
+
+message TopicSearch {
+  // Human-readable topic name, echoed back in the response.
+  string name = 1;
+  // Anki search string identifying the cards that belong to this topic.
+  string search = 2;
+}
+
+message TopicMasteryResponse {
+  repeated TopicMastery topics = 1;
+}
+
+message TopicMastery {
+  string name = 1;
+  // Total cards matching the topic's search string.
+  uint32 total_cards = 2;
+  // Cards that have been studied at least once (have an FSRS memory state).
+  uint32 reviewed_cards = 3;
+  // Cards whose current retrievability >= mastered_threshold.
+  uint32 mastered_cards = 4;
+  // Sum of repetitions across all of the topic's cards.
+  uint32 total_reviews = 5;
+  // Mean current retrievability (0-1) across reviewed cards; 0 if none.
+  float average_retrievability = 6;
+  // Whether the topic has any cards at all (coverage signal).
+  bool covered = 7;
+}
 
 message ReviewLogs {
   repeated CardStatsResponse.StatsRevlogEntry entries = 1;
