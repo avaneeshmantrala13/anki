@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
@@ -42,6 +43,18 @@ CONFIG_AI_MODEL = "brainlift_ai_model"
 DEFAULT_MODEL = "gpt-4o-mini"
 OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 ENV_API_KEY = "OPENAI_API_KEY"
+
+# --- leakage gate constants (shared with mobile; see BRAINLIFT_AI_SPEC.md) ---
+# An analog "leaks" when it is near-verbatim to its source AND resolves to the
+# SAME answer (the student who saw the source gets the answer for free). The
+# generation pipeline detects this, REGENERATES with a stronger re-parameterize
+# instruction up to MAX_REGEN times, and BLOCKS (withholds) the item if it still
+# leaks. The SERVED set therefore contains zero leaked items.
+LEAKAGE_SIM_THRESHOLD = 0.9  # jaccard question overlap that counts as near-verbatim
+MAX_REGEN = 3  # regeneration attempts before an item is blocked/withheld
+# Deterministic regen perturbs the parameter id by this stride so a re-generated
+# analog changes its numbers (and thus its answer). Mirrored in Kotlin.
+REGEN_PARAM_STRIDE = 101
 
 
 # --- shared numeric formatting (kept identical to Kotlin fmtNum) -------------
@@ -78,8 +91,89 @@ class GeneratedAnalog:
 
 class AiClient(Protocol):
     def generate_analog(
-        self, front: str, back: str, source_card_id: int
+        self, front: str, back: str, source_card_id: int, attempt: int = 0
     ) -> GeneratedAnalog: ...
+
+
+# --- leakage gate (shared logic; mirror in Kotlin) --------------------------
+# Detects true free-answer leakage and, via generate_gated_analog(), removes it
+# from the served set by regenerating then blocking. This is the safety net that
+# guarantees the shipped/served analogs are CLEAN even if the raw model copies.
+
+_LEAK_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _leak_tokens(text: str) -> set[str]:
+    return set(_LEAK_WORD_RE.findall(text.lower()))
+
+
+def question_similarity(a: str, b: str) -> float:
+    """Jaccard word overlap (identical to the eval harness `jaccard`)."""
+    ta, tb = _leak_tokens(a), _leak_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def _same_answer(generated: str, source: str) -> bool:
+    """True if the generated correct answer resolves to the same value as the
+    source answer (normalized string match OR numeric equality)."""
+    g = " ".join(generated.strip().lower().split())
+    s = " ".join(source.strip().lower().split())
+    if g == s:
+        return True
+    try:
+        return abs(float(g) - float(s)) < 1e-9
+    except ValueError:
+        return False
+
+
+def is_leaked(analog: GeneratedAnalog, source_front: str, source_back: str) -> bool:
+    """Leakage = near-verbatim question wording AND same resolved answer."""
+    if not analog.choices or not (0 <= analog.correct_index < len(analog.choices)):
+        return False
+    gen_answer = analog.choices[analog.correct_index]
+    sim = question_similarity(analog.question, source_front)
+    return sim >= LEAKAGE_SIM_THRESHOLD and _same_answer(gen_answer, source_back)
+
+
+@dataclass
+class GatedAnalog:
+    """Result of running the leakage gate on one generated analog.
+
+    * ``served`` — safe to show a student (never a leaked item).
+    * ``blocked`` — still leaked after MAX_REGEN retries; withheld from students.
+    * ``regen_attempts`` — how many regenerations were needed (0 == clean first try).
+    * ``leaked_initially`` — the raw model's first output leaked (transparency).
+    """
+
+    analog: GeneratedAnalog
+    served: bool
+    blocked: bool
+    regen_attempts: int
+    leaked_initially: bool
+
+
+def generate_gated_analog(
+    client: AiClient, front: str, back: str, source_card_id: int
+) -> GatedAnalog:
+    """Generate an analog and enforce the leakage gate: regenerate up to
+    ``MAX_REGEN`` times with a stronger re-parameterize instruction, then BLOCK
+    (withhold) if it still leaks. Guarantees the served item is not leaked."""
+    analog = client.generate_analog(front, back, source_card_id)
+    leaked_initially = is_leaked(analog, front, back)
+    attempts = 0
+    while is_leaked(analog, front, back) and attempts < MAX_REGEN:
+        attempts += 1
+        analog = client.generate_analog(front, back, source_card_id, attempt=attempts)
+    still_leaked = is_leaked(analog, front, back)
+    return GatedAnalog(
+        analog=analog,
+        served=not still_leaked,
+        blocked=still_leaked,
+        regen_attempts=attempts,
+        leaked_initially=leaked_initially,
+    )
 
 
 # --- deterministic template bank --------------------------------------------
@@ -242,7 +336,7 @@ class DeterministicAnalogClient:
     model = "deterministic"
 
     def generate_analog(
-        self, front: str, back: str, source_card_id: int
+        self, front: str, back: str, source_card_id: int, attempt: int = 0
     ) -> GeneratedAnalog:
         source_text = f"{front} :: {back}".strip()
         renderer = _matched_template(source_text)
@@ -250,8 +344,12 @@ class DeterministicAnalogClient:
         if renderer is None:
             # concept-variety fallback: deterministic pick keeps parity.
             renderer = _TEMPLATES[source_card_id % len(_TEMPLATES)][1]
-        question, correct, distractors = renderer(source_card_id)
-        choices, idx = _place(correct, distractors, source_card_id)
+        # On regeneration (attempt>0) perturb the parameter id so the numbers —
+        # and therefore the correct answer — change, resolving any leakage while
+        # still testing the same concept. Source traceability is unchanged.
+        param_id = source_card_id + attempt * REGEN_PARAM_STRIDE
+        question, correct, distractors = renderer(param_id)
+        choices, idx = _place(correct, distractors, param_id)
         return GeneratedAnalog(
             question=question,
             choices=choices,
@@ -272,22 +370,36 @@ class RealOpenAIClient:
         self.timeout = timeout
         self._fallback = DeterministicAnalogClient()
 
-    def _prompt(self, front: str, back: str) -> list[dict]:
+    def _prompt(self, front: str, back: str, attempt: int = 0) -> list[dict]:
         system = (
             "You are an actuarial exam tutor. Given a source flashcard, write ONE "
             "multiple-choice analog question that tests the SAME concept but is "
-            "reworded and re-parameterized (different numbers/scenario). Return "
-            "STRICT JSON: {\"question\": str, \"choices\": [str,...], "
+            "reworded and RE-PARAMETERIZED. You MUST change the numbers/scenario "
+            "so the correct answer is DIFFERENT from the source answer — never "
+            "copy the source question and never reuse its answer. Return STRICT "
+            "JSON: {\"question\": str, \"choices\": [str,...], "
             "\"correct_index\": int}. 3-4 choices, exactly one correct."
         )
-        user = f"SOURCE FRONT: {front}\nSOURCE BACK: {back}\nReturn only JSON."
+        user = (
+            f"SOURCE FRONT: {front}\nSOURCE BACK: {back}\n"
+            f"The source answer is '{back}'. Your analog MUST use different "
+            "numbers so its correct answer is NOT equal to that. Return only JSON."
+        )
+        if attempt > 0:
+            # Escalating instruction: the previous output leaked (near-verbatim +
+            # same answer). Force a bigger re-parameterization.
+            user += (
+                f"\n\nRETRY {attempt}: your previous analog was too close to the "
+                "source and resolved to the SAME answer. Substantially change the "
+                "numbers and phrasing so the correct answer clearly differs."
+            )
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
 
     def generate_analog(
-        self, front: str, back: str, source_card_id: int
+        self, front: str, back: str, source_card_id: int, attempt: int = 0
     ) -> GeneratedAnalog:
         source_text = f"{front} :: {back}".strip()
         try:
@@ -301,7 +413,7 @@ class RealOpenAIClient:
                 },
                 json={
                     "model": self.model,
-                    "messages": self._prompt(front, back),
+                    "messages": self._prompt(front, back, attempt),
                     "temperature": 0.7,
                     "response_format": {"type": "json_object"},
                 },
@@ -327,7 +439,7 @@ class RealOpenAIClient:
             )
         except Exception:
             # Any failure (offline, rate-limited, bad JSON) -> clean fallback.
-            fb = self._fallback.generate_analog(front, back, source_card_id)
+            fb = self._fallback.generate_analog(front, back, source_card_id, attempt)
             fb.model = f"{self.model}-fallback"
             fb.ok = False
             return fb

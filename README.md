@@ -48,9 +48,13 @@ deterministic fallback — a hard requirement. Formulas are specified once in
 The key is read **only** from the `OPENAI_API_KEY` environment variable (never
 stored or committed). The OpenAI client degrades gracefully (offline /
 rate-limited / bad output → deterministic fallback, never crashes, never blocks
-scoring). An eval/proof harness lives in `brainlift_eval/` (held-out accuracy vs
-a pre-declared cutoff, gold-set counts, baseline comparison, leakage check,
-paraphrase gap) and runs offline with no key.
+scoring). Every generated analog also passes through a **leakage gate**
+(regenerate-then-block): if an analog is near-verbatim to its source AND resolves
+to the same answer it is regenerated with a stronger re-parameterize instruction
+(up to `MAX_REGEN=3`), and blocked/withheld if it still leaks, so the served set
+is guaranteed clean. An eval/proof harness lives in `brainlift_eval/` (held-out
+accuracy vs a pre-declared cutoff, gold-set counts, baseline comparison, leakage
+check on the served/post-gate set, paraphrase gap) and runs offline with no key.
 
 ### Attribution
 

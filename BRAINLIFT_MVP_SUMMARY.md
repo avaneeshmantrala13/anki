@@ -126,7 +126,16 @@ Kotlin `BrainLiftParityTest`. All new state lives in collection config, so it
   - **Gold set (50):** 38 correct-and-useful / 12 correct-but-bad-teaching / 0 wrong.
   - **Baseline beat:** structured generator 33/50 valid re-parameterized analogs vs
     keyword-retrieval baseline 0/50.
-  - **Leakage:** 0 true duplicates (near-verbatim + identical answer) — CLEAN.
+  - **Leakage (served/post-gate set):** 0 true duplicates — CLEAN. Before any
+    analog is served, a **leakage gate** (regenerate-then-block, shared by desktop
+    `generate_gated_analog` and mobile `generateGatedAnalog`) checks each item;
+    true near-duplicates (near-verbatim question + identical answer, threshold
+    `LEAKAGE_SIM_THRESHOLD=0.9`) are **regenerated** up to `MAX_REGEN=3` times with
+    a stronger re-parameterize instruction, then **blocked/withheld** if still
+    leaking (same path as `wrong` items). The eval scans the served set and
+    honestly reports raw-leaked / caught-and-regenerated / blocked counts (offline:
+    0 / 0 / 0; the gate is what removes the occasional live-model copy — e.g. the
+    gpt-4o-mini leak on source card `m06`).
   - **Paraphrase gap:** original-recall 84.9% vs analog-accuracy 57.9% → **26.9%** gap.
   - **Named-source traceability:** every generated item carries `source_card_id` +
     `source_text`; the harness asserts this.

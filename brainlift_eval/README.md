@@ -32,7 +32,7 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 | `run_eval.py` | Held-out eval **before** students, with a cutoff decided **before** looking | 20 held-out gold items generated + graded; **pre-declared** cutoffs `wrong-rate <= 10%` and `useful-rate >= 50%`; failing items are **blocked** (withheld). |
 | `gold_eval.py` | Gold set of 50 Q/A run through the checker | Buckets all 50 into correct-and-useful / wrong / correct-but-bad-teaching. |
 | `baseline.py` | AI beats a simpler baseline at valid analogs | Structured generator vs a keyword-retrieval baseline; metric = valid re-parameterized analogs. |
-| `leakage_check.py` | Leakage scan is clean | Flags an analog only when it is near-verbatim **and** resolves to the same answer as a gold item (true free-answer leakage). |
+| `leakage_check.py` | Leakage scan is clean | Scans the **served (post-gate) set**. The generation pipeline runs a leakage gate (regenerate-then-block); this check flags an analog only when it is near-verbatim **and** resolves to the same answer as a gold item, and reports how many raw items leaked / were caught-and-regenerated / were blocked. |
 | `paraphrase_gap.py` | Performance != memory | Compares original-card recall vs reworded-analog accuracy over 30 cards. |
 | every script | Named-source traceability | Each generated item carries `source_card_id` + `source_text`; scripts assert it is present. |
 
@@ -52,6 +52,15 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 - **Leakage** is defined as true free-answer leakage (near-verbatim wording **and**
   identical answer), not mere phrasing similarity — a genuine analog is expected to
   share concept phrasing with the source while changing the numbers/answer.
+- **Leakage gate (regenerate-then-block):** before any analog is served, the
+  generation pipeline (`anki.brainlift.ai.generate_gated_analog`, mirrored in
+  Kotlin `BrainLiftAi.generateGatedAnalog`) checks each item for leakage. Leaked
+  items are **regenerated** up to `MAX_REGEN=3` times with a stronger
+  re-parameterize instruction (threshold `LEAKAGE_SIM_THRESHOLD=0.9`); if still
+  leaking they are **blocked** (withheld, same path as `wrong` items). So the
+  served set has zero leaked items. `leakage_check.py` scans that served set and
+  reports the raw-leaked / caught-and-regenerated / blocked counts — we do **not**
+  weaken the definition or hide detections; the gate removes them before serving.
 - **Offline == live shape:** offline uses `DeterministicAnalogClient`; `--live` uses
   `RealOpenAIClient`. Both return the same `GeneratedAnalog` structure, so the eval
   and the checker are identical across modes. This is exactly the mockable-client +
@@ -65,5 +74,5 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 - Held-out (20): useful 85%, wrong 0% -> **PASS** (cutoffs: wrong <=10%, useful >=50%)
 - Gold set (50): 38 correct-and-useful / 12 correct-but-bad-teaching / 0 wrong
 - Baseline: structured 33/50 valid analogs vs keyword baseline 0/50 -> **structured BEATS**
-- Leakage: 0 true duplicates -> **CLEAN**
+- Leakage (served/post-gate set): 0 true duplicates -> **CLEAN** (0 raw-leaked, 0 regenerated, 0 blocked offline; the gate catches live-model leaks)
 - Paraphrase gap: original 84.9% vs analog 57.9% -> **26.9% gap**

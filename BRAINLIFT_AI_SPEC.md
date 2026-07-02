@@ -282,6 +282,50 @@ GeneratedAnalog {
 - `get_client(enabled, model, api_key)` returns Real if `enabled AND key` else
   Deterministic. **AI OFF ⇒ Deterministic**, so all scores still compute.
 
+### 7.0 Leakage gate (regenerate-then-block) — shared constants
+
+Every generated analog is passed through a **leakage gate** before it is served
+to a student. This is the safety net that guarantees the shipped/served set is
+CLEAN even if the raw model copies the source instead of re-parameterizing it.
+
+```
+LEAKAGE_SIM_THRESHOLD = 0.9    # jaccard word overlap of question vs source front
+MAX_REGEN             = 3       # regeneration attempts before an item is blocked
+REGEN_PARAM_STRIDE    = 101     # deterministic regen perturbs the param id by this
+```
+
+**Leakage definition (identical to the eval's `leakage_check`):** an analog is
+*leaked* when its question is near-verbatim to the source AND its correct answer
+resolves to the SAME value as the source answer:
+
+```
+is_leaked(analog, src_front, src_back) =
+    question_similarity(analog.question, src_front) >= LEAKAGE_SIM_THRESHOLD
+    AND same_answer(analog.correct_choice, src_back)
+```
+- `question_similarity` = Jaccard over `[a-z0-9]+` word tokens (same as the eval).
+- `same_answer` = normalized string equality OR numeric equality (e.g. `0.20`==`0.2`).
+
+**Gate algorithm (`generate_gated_analog` / `generateGatedAnalog`):**
+```
+analog = client.generate_analog(front, back, id, attempt=0)
+leaked_initially = is_leaked(analog, front, back)
+attempts = 0
+while is_leaked(analog, front, back) and attempts < MAX_REGEN:
+    attempts += 1
+    analog = client.generate_analog(front, back, id, attempt=attempts)
+served  = not is_leaked(analog, front, back)
+blocked = not served          # still leaked after MAX_REGEN -> withheld from students
+```
+- **RealOpenAIClient**: on `attempt>0` the prompt gets an escalating "your
+  previous analog leaked — substantially change the numbers/phrasing" instruction.
+- **DeterministicAnalogClient**: on `attempt>0` the parameter id is perturbed by
+  `attempt * REGEN_PARAM_STRIDE`, so the numbers (and the answer) change while the
+  concept is unchanged.
+- Blocked items use the **same withhold path as `wrong` items**: they are never
+  served. The eval reports how many raw items leaked, how many were
+  caught-and-regenerated, and how many were blocked (honest transparency).
+
 ### 7.1 SpeedRunner eval requirements (see `brainlift_eval/`)
 - Named source on every generated item (`source_card_id`, `source_text`).
 - Held-out eval with a **pre-declared** pass/fail cutoff; failing items blocked.
@@ -289,6 +333,8 @@ GeneratedAnalog {
   correct-but-bad-teaching.
 - Baseline comparison: AI-style structured generator vs keyword/embedding
   baseline at producing valid analog questions.
-- Leakage check: flag near-duplicates of gold/test set.
+- Leakage check: scans the **served (post-gate) set**; the generation pipeline
+  regenerates-then-blocks true near-duplicates so the served set is CLEAN, while
+  the eval honestly reports caught-and-regenerated / blocked counts (§7.0).
 - Paraphrase gap: recall on original vs accuracy on reworded analog.
 - Graceful degradation when AI offline/rate-limited/broken.

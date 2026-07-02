@@ -29,12 +29,36 @@ def get_generator(live: bool):
 
 
 def generate_for_gold(gold: list[dict], client) -> list:
-    """Generate one analog per gold item; the gold id becomes the source card id."""
+    """Generate one RAW analog per gold item (no leakage gate); the gold id
+    becomes the source card id."""
     analogs = []
     for i, item in enumerate(gold):
         # stable integer source id from position (mirrors card ids)
         analogs.append(client.generate_analog(item["front"], item["back"], 1000 + i))
     return analogs
+
+
+def generate_served_for_gold(gold: list[dict], client):
+    """Run the SERVED pipeline: generate each analog THROUGH the leakage gate
+    (regenerate-then-block). Returns ``(served, stats)`` where ``served`` is the
+    list of gated results and ``stats`` reports how many raw items leaked, were
+    caught-and-regenerated, and were blocked/withheld. This mirrors exactly what
+    students would actually see, on both desktop and mobile."""
+    gated = []
+    for i, item in enumerate(gold):
+        gated.append(
+            blai.generate_gated_analog(client, item["front"], item["back"], 1000 + i)
+        )
+    stats = {
+        "total": len(gated),
+        "leaked_raw": sum(1 for g in gated if g.leaked_initially),
+        "caught_regenerated": sum(
+            1 for g in gated if g.regen_attempts > 0 and not g.blocked
+        ),
+        "blocked": sum(1 for g in gated if g.blocked),
+        "served": sum(1 for g in gated if g.served),
+    }
+    return gated, stats
 
 
 _WORD = re.compile(r"[a-z0-9]+")

@@ -150,6 +150,19 @@ Proves: named-source traceability, held-out accuracy vs a **pre-declared** cutof
 correct-but-bad-teaching), AI-vs-baseline valid-analog rate, a clean leakage
 check, and the paraphrase gap (recall on original vs accuracy on analog).
 
+**Leakage gate (regenerate-then-block).** `leakage_check.py` scans the **served
+(post-gate)** set. The generation pipeline (`anki.brainlift.ai.generate_gated_analog`,
+mirrored in Kotlin `BrainLiftAi.generateGatedAnalog`) checks each analog for true
+free-answer leakage (question near-verbatim to source **and** same resolved answer,
+threshold `LEAKAGE_SIM_THRESHOLD=0.9`). Leaked items are **regenerated** up to
+`MAX_REGEN=3` times with a stronger re-parameterize instruction, then **blocked**
+(withheld, same path as `wrong` items) if still leaking — so the served set is
+CLEAN. The check reports raw-leaked / caught-and-regenerated / blocked counts; the
+definition is **not** weakened and detections are **not** hidden (a live gpt-4o-mini
+run that copies a source, e.g. on card `m06`, is caught by the gate before serving).
+Parity is asserted by `pylib/tests/test_brainlift_leakage.py` and the Kotlin
+`BrainLiftParityTest` gate tests.
+
 ---
 
 ## 6. Desktop ↔ mobile sync (FULL two-way validation)
