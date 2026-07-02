@@ -16,6 +16,42 @@ coverage and a rule-based study plan. Every number comes from transparent rules.
   reimplements the same deterministic coverage/measurement aggregation in Kotlin
   (identical formulas, thresholds, and config shapes), so results match.
 
+### Optional AI features (opt-in; the three scores work with AI OFF)
+
+Two AI features sit *on top of* the deterministic core. They are behind a master
+toggle (`brainlift_ai_enabled`, default OFF). **With AI off the app still fully
+produces Memory / Performance / Readiness and both features function** via a
+deterministic fallback — a hard requirement. Formulas are specified once in
+`BRAINLIFT_AI_SPEC.md` and mirrored identically in Python (desktop) and Kotlin
+(mobile); parity is enforced by tests on both platforms.
+
+1. **Metacognitive calibration ("confidence authority").** The learner self-rates
+   confidence on 15 Exam P cards, then answers 15 AI-generated *analog* questions
+   (reworded / re-parameterized versions of each card). What AI does: generate the
+   analog MCQ via OpenAI (`gpt-4o-mini` by default, configurable); **every
+   generated item records its source card id + source text** (named-source
+   traceability). We score deviation = |confidence − performance|, report a
+   headline calibration accuracy = 1 − mean deviation (plus a Goodman-Kruskal
+   gamma resolution figure), and derive a **confidence-authority multiplier** that
+   scales how strongly demonstrated "knownness" suppresses future reviews
+   (well-calibrated learners keep authority; poorly-calibrated learners keep more
+   review coverage). The multiplier persists in synced config and feeds the
+   scheduler on both platforms.
+2. **Cognitive-load / fatigue offload.** During a session we detect drain from
+   per-question response time vs a slow personal baseline, accuracy drop, RT
+   variability, and post-error slowing (EWMA-smoothed, anti-thrash cooldown).
+   When drained we *gradually* ease difficulty or interleave the three sub-topics,
+   and always show a visible banner ("Cognitive offload — easing difficulty" /
+   "…adding variety"). A TEST MODE config flag fires interventions immediately;
+   in PROD they wait ~1–2 h unless the learner is clearly struggling severely.
+
+The key is read **only** from the `OPENAI_API_KEY` environment variable (never
+stored or committed). The OpenAI client degrades gracefully (offline /
+rate-limited / bad output → deterministic fallback, never crashes, never blocks
+scoring). An eval/proof harness lives in `brainlift_eval/` (held-out accuracy vs
+a pre-declared cutoff, gold-set counts, baseline comparison, leakage check,
+paraphrase gap) and runs offline with no key.
+
 ### Attribution
 
 - Built on **Anki** (AGPL-3.0-or-later).

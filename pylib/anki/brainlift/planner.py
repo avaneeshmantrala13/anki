@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING
 
+from anki.brainlift import calibration as calib
 from anki.brainlift import diagnostic as dx
 from anki.brainlift import exam_p
 from anki.brainlift import onboarding as ob
@@ -77,6 +78,10 @@ def build_study_plan(col: Collection, today: date | None = None) -> StudyPlan:
     """Build a deterministic study plan from the persisted signals."""
     coverage = exam_p.coverage_report(col)
     diag_acc = _diagnostic_accuracy_by_topic(col)
+    # Feature 1: confidence-authority multiplier (synced). Scales how strongly a
+    # topic's demonstrated "knownness" is allowed to suppress its review
+    # priority. Defaults to 1.0 (full authority) when no calibration exists.
+    authority = calib.calibration_multiplier(col)
 
     profile = ob.load_onboarding(col)
     if profile is not None:
@@ -90,7 +95,7 @@ def build_study_plan(col: Collection, today: date | None = None) -> StudyPlan:
     priorities: list[TopicPriority] = []
     for topic in coverage.topics:
         importance = topic.weight / _MAX_WEIGHT
-        mastery_gap = 1.0 - topic.mastered_fraction
+        mastery_gap = calib.effective_mastery_gap(topic.mastered_fraction, authority)
         coverage_gap = 1.0 if topic.total_cards == 0 else (1.0 - topic.reviewed_fraction)
         if topic.key in diag_acc:
             diagnostic_gap = 1.0 - diag_acc[topic.key]

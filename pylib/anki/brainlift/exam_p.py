@@ -12,9 +12,9 @@ syllabus and interprets the results.
 
 Topic weights are the midpoints of the official SOA Exam P weight ranges:
 
-* General Probability            10-17%  -> 13.5
-* Univariate Random Variables    40-47%  -> 43.5
-* Multivariate Random Variables  40-47%  -> 43.5
+* General Probability            23-30%  -> 26.5
+* Univariate Random Variables    44-50%  -> 47.0
+* Multivariate Random Variables  23-30%  -> 26.5
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ SYLLABUS: tuple[Topic, ...] = (
     Topic(
         key="GeneralProbability",
         name="General Probability",
-        weight=13.5,
+        weight=26.5,
         subtopics=(
             Subtopic("SampleSpacesEvents", "Sample spaces and events"),
             Subtopic("Combinatorics", "Combinatorial probability"),
@@ -89,7 +89,7 @@ SYLLABUS: tuple[Topic, ...] = (
     Topic(
         key="UnivariateRV",
         name="Univariate Random Variables",
-        weight=43.5,
+        weight=47.0,
         subtopics=(
             Subtopic("DiscreteDistributions", "Discrete distributions (binomial, Poisson, geometric, ...)"),
             Subtopic("ContinuousDistributions", "Continuous distributions (uniform, exponential, gamma, normal)"),
@@ -102,7 +102,7 @@ SYLLABUS: tuple[Topic, ...] = (
     Topic(
         key="MultivariateRV",
         name="Multivariate Random Variables",
-        weight=43.5,
+        weight=26.5,
         subtopics=(
             Subtopic("JointDistributions", "Joint distributions"),
             Subtopic("MarginalConditional", "Marginal and conditional distributions"),

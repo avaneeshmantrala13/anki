@@ -35,6 +35,73 @@ def open_home(mw: AnkiQt) -> None:
     mw.moveToState(STATE)
 
 
+def open_calibration(mw: AnkiQt) -> None:
+    if mw.col is None:
+        return
+    from aqt.brainlift.calibration_dialog import CalibrationDialog
+
+    CalibrationDialog(mw).exec()
+
+
+def open_ai_settings(mw: AnkiQt) -> None:
+    """Master AI toggle + model + fatigue TEST MODE (all synced via config)."""
+    if mw.col is None:
+        return
+    from anki.brainlift import ai as blai
+    from anki.brainlift import fatigue as fx
+    from aqt.qt import (
+        QCheckBox,
+        QDialog,
+        QDialogButtonBox,
+        QLabel,
+        QLineEdit,
+        QVBoxLayout,
+        qconnect,
+    )
+
+    col = mw.col
+    dlg = QDialog(mw)
+    dlg.setWindowTitle("BrainLift — AI settings")
+    dlg.setMinimumWidth(460)
+    lay = QVBoxLayout()
+    lay.setContentsMargins(20, 16, 20, 16)
+    lay.setSpacing(10)
+
+    ai_cb = QCheckBox("Enable AI features (OpenAI analog generation)")
+    ai_cb.setChecked(blai.ai_enabled(col))
+    lay.addWidget(ai_cb)
+
+    key_note = QLabel(
+        "Reads the key only from the OPENAI_API_KEY environment variable. "
+        + ("A key is set." if blai.api_key_from_env() else "No key detected — analogs fall back to the deterministic generator.")
+    )
+    key_note.setWordWrap(True)
+    key_note.setStyleSheet("color: palette(mid); font-size: 12px;")
+    lay.addWidget(key_note)
+
+    model_label = QLabel("Model:")
+    lay.addWidget(model_label)
+    model_edit = QLineEdit(blai.ai_model(col))
+    lay.addWidget(model_edit)
+
+    fatigue_cb = QCheckBox("Fatigue TEST MODE (intervene immediately for testing)")
+    fatigue_cb.setChecked(fx.test_mode(col))
+    lay.addWidget(fatigue_cb)
+
+    buttons = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+    )
+    qconnect(buttons.accepted, dlg.accept)
+    qconnect(buttons.rejected, dlg.reject)
+    lay.addWidget(buttons)
+    dlg.setLayout(lay)
+
+    if dlg.exec():
+        blai.set_ai_enabled(col, ai_cb.isChecked())
+        blai.set_ai_model(col, model_edit.text().strip() or blai.DEFAULT_MODEL)
+        fx.set_test_mode(col, fatigue_cb.isChecked())
+
+
 def setup_menu(mw: AnkiQt) -> None:
     """Register the landing state + menu action (idempotent)."""
     if getattr(mw, "_brainlift_action", None) is not None:
@@ -57,6 +124,19 @@ def setup_menu(mw: AnkiQt) -> None:
     qconnect(action.triggered, lambda: open_home(mw))
     mw.form.menuTools.addAction(action)
     mw._brainlift_action = action
+
+    calib_action = QAction("BrainLift: Confidence calibration…", mw)
+    qconnect(calib_action.triggered, lambda: open_calibration(mw))
+    mw.form.menuTools.addAction(calib_action)
+
+    settings_action = QAction("BrainLift: AI settings…", mw)
+    qconnect(settings_action.triggered, lambda: open_ai_settings(mw))
+    mw.form.menuTools.addAction(settings_action)
+
+    # Feature 2: feed reviews into the fatigue detector (+ visible banner).
+    from aqt.brainlift import fatigue_hooks
+
+    fatigue_hooks.install(mw)
 
     gui_hooks.profile_did_open.append(lambda: _land_home(mw))
     gui_hooks.state_did_change.append(

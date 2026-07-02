@@ -21,52 +21,118 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from aqt.main import AnkiQt
 
+# Landing-specific styles. Rendered after DASHBOARD_CSS, which defines the
+# shared --bl-* design tokens (light + night-mode); the extra tokens the
+# landing needs are defined here.
 LANDING_CSS = """
+  :root {
+    --bl-success: #178c53;
+    --bl-success-tint: #e3f4ea;
+    --bl-primary-hover: #4159d6;
+    --bl-primary-active: #3a50c4;
+    --bl-primary-tint: #edf1fe;
+    --bl-primary-tint-border: #dbe2fc;
+    --bl-hero-a: #5068ea;
+    --bl-hero-b: #3d51cd;
+    --bl-hero-shadow: 0 12px 32px rgba(61,81,205,.22);
+    --bl-focus-ring: 0 0 0 3px rgba(79,107,237,.28);
+  }
+  html.night-mode, body.nightMode {
+    --bl-success: #46c088;
+    --bl-success-tint: rgba(70,192,136,.15);
+    --bl-primary-hover: #8496f4;
+    --bl-primary-active: #6377e8;
+    --bl-primary-tint: rgba(115,135,242,.14);
+    --bl-primary-tint-border: rgba(115,135,242,.32);
+    --bl-hero-a: #4358cf;
+    --bl-hero-b: #333fa8;
+    --bl-hero-shadow: 0 12px 32px rgba(0,0,0,.45);
+    --bl-focus-ring: 0 0 0 3px rgba(115,135,242,.35);
+  }
+  /* The landing owns its own padding; undo the dashboard body padding. */
+  body { padding:0; margin:0; background:var(--bl-bg); }
   .bl-root, .bl-root *, .bl-root *::before, .bl-root *::after { box-sizing:border-box; }
-  .bl-root { background:#f4f5f9; color:#1d1d24; min-height:100vh; margin:0;
-             padding:28px 30px 60px;
-             font-family:-apple-system,Segoe UI,Roboto,sans-serif; }
+  .bl-root { background:var(--bl-bg); color:var(--bl-text); min-height:100vh;
+             margin:0; padding:32px 32px 64px;
+             font-family:-apple-system,"Segoe UI Variable","Segoe UI",Roboto,
+                         "Helvetica Neue",Arial,sans-serif;
+             -webkit-font-smoothing:antialiased; }
   .bl-wrap { max-width:900px; margin:0 auto; }
-  .hero { background:linear-gradient(135deg,#4f6bed,#8a4fed); color:#fff;
-          border-radius:18px; padding:28px 30px; margin-bottom:22px;
-          box-shadow:0 8px 30px rgba(79,107,237,.25); }
-  .hero .eyebrow { text-transform:uppercase; letter-spacing:.1em; font-size:11px;
-                   opacity:.85; }
-  .hero h1 { color:#fff; font-size:26px; margin:6px 0 4px; }
-  .hero .lead { font-size:15px; opacity:.95; margin:0 0 18px; max-width:620px; }
-  .hero .cta { background:#fff; color:#3b3b7a; border:none; border-radius:10px;
-               padding:13px 22px; font-size:15px; font-weight:700; cursor:pointer; }
-  .hero .cta:hover { background:#f0f0ff; }
-  .section-label { font-size:12px; text-transform:uppercase; letter-spacing:.06em;
-                   color:#7a7a86; margin:26px 0 10px; font-weight:700; }
+  .bl-root button { transition:background .12s ease, border-color .12s ease,
+                    color .12s ease, box-shadow .12s ease; }
+  .bl-root button:focus-visible { outline:none; box-shadow:var(--bl-focus-ring); }
+
+  .hero { background:linear-gradient(160deg,var(--bl-hero-a),var(--bl-hero-b));
+          color:#fff; border-radius:16px; padding:28px 30px; margin-bottom:24px;
+          box-shadow:var(--bl-hero-shadow); }
+  .hero .eyebrow { text-transform:uppercase; letter-spacing:.12em; font-size:11px;
+                   font-weight:600; opacity:.8; }
+  .hero h1 { color:#fff; font-size:24px; margin:8px 0 6px; letter-spacing:-.02em; }
+  .hero .lead { font-size:14px; line-height:1.55; opacity:.92; margin:0 0 20px;
+                max-width:620px; }
+  .hero .cta { background:#fff; color:var(--bl-hero-b); border:none;
+               border-radius:10px; padding:12px 22px; font-size:14px;
+               font-weight:600; cursor:pointer;
+               box-shadow:0 1px 3px rgba(16,20,50,.25); }
+  .hero .cta:hover { background:#f2f4ff; }
+  .hero .cta:active { background:#e7ebfe; }
+  .hero .cta:focus-visible { outline:none;
+               box-shadow:0 0 0 3px rgba(255,255,255,.45); }
+
+  .section-label { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+                   color:var(--bl-text-3); margin:28px 0 10px; font-weight:600; }
+
   .steps { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
-  .step { background:#fff; border-radius:14px; padding:16px; position:relative;
-          box-shadow:0 1px 4px rgba(0,0,0,.07); border-top:4px solid #e3e3ea;
-          display:flex; flex-direction:column; }
-  .step.next { border-top-color:#4f6bed; box-shadow:0 6px 18px rgba(79,107,237,.18); }
-  .step.done { border-top-color:#1a9e5f; }
-  .step .num { width:28px; height:28px; border-radius:50%; background:#eef0f6;
-               color:#4f6bed; font-weight:700; display:flex; align-items:center;
-               justify-content:center; font-size:14px; margin-bottom:10px; }
-  .step.done .num { background:#e4f6ec; color:#1a9e5f; }
-  .step .title { font-weight:700; font-size:14px; margin-bottom:4px; }
-  .step .desc { font-size:12px; color:#6b6b76; flex:1; margin-bottom:12px; }
-  .pill { display:inline-block; font-size:10px; padding:2px 8px; border-radius:20px;
-          font-weight:700; margin-bottom:10px; width:fit-content; }
-  .pill.done { background:#e4f6ec; color:#1a9e5f; }
-  .pill.todo { background:#eef0f6; color:#4f6bed; }
-  .pill.optional,.pill.locked { background:#f0f0f2; color:#8a8a90; }
-  .step .btn { background:#4f6bed; color:#fff; border:none; border-radius:9px;
-               padding:9px 12px; font-size:13px; font-weight:600; cursor:pointer;
-               width:100%; }
-  .step .btn.secondary { background:#eef0f6; color:#3b3b7a; }
-  .step .btn:disabled { background:#e6e6ea; color:#a8a8ae; cursor:default; }
+  .step { background:var(--bl-surface); border-radius:12px; padding:16px;
+          position:relative; border:1px solid var(--bl-border);
+          box-shadow:var(--bl-shadow-card); border-top:3px solid var(--bl-border);
+          display:flex; flex-direction:column;
+          transition:box-shadow .15s ease, border-color .15s ease; }
+  .step.next { border-top-color:var(--bl-primary);
+               box-shadow:0 4px 14px rgba(79,107,237,.14); }
+  .step.done { border-top-color:var(--bl-success); }
+  .step .num { width:26px; height:26px; border-radius:50%;
+               background:var(--bl-surface-2); color:var(--bl-primary);
+               font-weight:600; display:flex; align-items:center;
+               justify-content:center; font-size:13px; margin-bottom:10px;
+               font-variant-numeric:tabular-nums; }
+  .step.done .num { background:var(--bl-success-tint); color:var(--bl-success); }
+  .step .title { font-weight:600; font-size:14px; margin-bottom:4px;
+                 letter-spacing:-.01em; }
+  .step .desc { font-size:12px; line-height:1.5; color:var(--bl-text-2); flex:1;
+                margin-bottom:12px; }
+  .pill { display:inline-block; font-size:10px; padding:3px 8px;
+          border-radius:20px; font-weight:600; text-transform:uppercase;
+          letter-spacing:.04em; margin-bottom:10px; width:fit-content; }
+  .pill.done { background:var(--bl-success-tint); color:var(--bl-success); }
+  .pill.todo { background:var(--bl-primary-tint); color:var(--bl-primary); }
+  .pill.optional,.pill.locked { background:var(--bl-surface-2);
+          color:var(--bl-text-3); }
+  .step .btn { background:var(--bl-primary); color:#fff; border:none;
+               border-radius:9px; padding:9px 12px; font-size:13px;
+               font-weight:600; cursor:pointer; width:100%; }
+  .step .btn:hover { background:var(--bl-primary-hover); }
+  .step .btn:active { background:var(--bl-primary-active); }
+  .step .btn.secondary { background:var(--bl-surface-2); color:var(--bl-text-2); }
+  .step .btn.secondary:hover { background:var(--bl-primary-tint);
+               color:var(--bl-primary); }
+  .step .btn:disabled { background:var(--bl-surface-2); color:var(--bl-text-3);
+               cursor:default; }
+  .step .btn:disabled:hover { background:var(--bl-surface-2);
+               color:var(--bl-text-3); }
+
   .quick { display:flex; gap:10px; flex-wrap:wrap; }
-  .quick .qbtn { background:#fff; border:1px solid #e3e3ea; border-radius:10px;
-                 padding:12px 16px; font-size:13px; font-weight:600; color:#3b3b7a;
-                 cursor:pointer; display:flex; align-items:center; gap:8px; }
-  .quick .qbtn:hover { border-color:#4f6bed; color:#4f6bed; }
-  .quick .qbtn .ico { font-size:16px; }
+  .quick .qbtn { background:var(--bl-surface); border:1px solid var(--bl-border);
+                 border-radius:10px; padding:11px 16px; font-size:13px;
+                 font-weight:600; color:var(--bl-text-2); cursor:pointer;
+                 display:flex; align-items:center; gap:8px;
+                 box-shadow:var(--bl-shadow-card); }
+  .quick .qbtn:hover { border-color:var(--bl-primary-tint-border);
+                 background:var(--bl-primary-tint); color:var(--bl-primary); }
+  .quick .qbtn:active { background:var(--bl-surface-2); }
+  .quick .qbtn .ico { font-size:14px; color:var(--bl-text-3); }
+  .quick .qbtn:hover .ico { color:var(--bl-primary); }
+
   .dash-wrap { background:transparent; margin-top:6px; }
   @media (max-width:760px){ .steps{ grid-template-columns:1fr 1fr; } }
 """
@@ -239,6 +305,8 @@ class BrainLiftLanding:
             "<span class='ico'>▤</span> Browse</button>"
             "<button class='qbtn' onclick=\"pycmd('bl:stats')\">"
             "<span class='ico'>▦</span> Stats</button>"
+            "<button class='qbtn' onclick=\"pycmd('bl:calibrate')\">"
+            "<span class='ico'>◎</span> Confidence calibration</button>"
             "<button class='qbtn' onclick=\"pycmd('bl:sync')\">"
             "<span class='ico'>⟳</span> Sync</button>"
             "</div>"
@@ -310,9 +378,17 @@ class BrainLiftLanding:
             self.mw.onStats()
         elif cmd == "bl:sync":
             self.mw.onSync()
+        elif cmd == "bl:calibrate":
+            self._open_calibration()
         elif cmd == "bl:refresh":
             self.render()
         return None
+
+    def _open_calibration(self) -> None:
+        from aqt.brainlift.calibration_dialog import CalibrationDialog
+
+        CalibrationDialog(self.mw).exec()
+        self.render()
 
     def _open_onboarding(self) -> None:
         from aqt.brainlift.onboarding_dialog import OnboardingDialog

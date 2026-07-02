@@ -101,17 +101,98 @@ needed for the default-content feature).
 
 ---
 
-## 4. Desktop ↔ mobile sync
+## 4. AI features (Feature 1 calibration + Feature 2 fatigue)
+
+Both features are opt-in behind `brainlift_ai_enabled` (default OFF) and share
+one spec, `BRAINLIFT_AI_SPEC.md`. All new state is in collection config, so it
+syncs. Formulas are mirrored in Python + Kotlin and parity-tested.
+
+**Desktop tests** (`pylib/tests/test_brainlift_calibration.py`,
+`test_brainlift_fatigue.py`):
+- deviation / MAD / accuracy (perfect, worst, mixed calibration)
+- Goodman-Kruskal gamma (+1 / −1 / undefined→None)
+- authority multiplier bounds + monotonicity; `effective_mastery_gap` scaling
+- score + persist round-trip; **named-source recorded on every item**
+- **AI-off** uses the deterministic client and still scores
+- real client with a bogus key **falls back gracefully** (`ok=False`, no raise)
+- fatigue: warmup, steady=no drain, degradation triggers in TEST MODE, PROD
+  timing gate blocks moderate early drain, severe overrides gate, interleave on
+  long same-topic streak, cooldown prevents thrash, persisted/synced session
+
+```bash
+cd SpeedRun/anki/pylib
+PYTHONPATH="$(pwd):$(pwd)/../out/pylib" ../out/pyenv/bin/python -m pytest -q \
+  tests/test_brainlift_calibration.py tests/test_brainlift_fatigue.py
+# Result (this batch): 22 passed. Full BrainLift suite: 58 passed.
+```
+
+**Mobile parity test** (`AnkiDroid/.../brainlift/BrainLiftParityTest.kt`) asserts
+the SAME numbers as the desktop tests:
+```bash
+cd SpeedRun/Anki-Android
+./gradlew :AnkiDroid:testPlayDebugUnitTest --tests "com.ichi2.anki.brainlift.BrainLiftParityTest"
+```
+
+---
+
+## 5. AI eval / proof harness (`brainlift_eval/`)
+
+Runs fully **offline with no `OPENAI_API_KEY`** (deterministic client stands in
+for GPT via fixtures); a live key + `--live` exercises real generation.
+
+```bash
+cd SpeedRun/anki
+python brainlift_eval/run_all.py            # held-out eval, gold counts, baseline, leakage, paraphrase gap
+OPENAI_API_KEY=sk-... python brainlift_eval/run_all.py --live   # real GPT
+```
+Proves: named-source traceability, held-out accuracy vs a **pre-declared** cutoff
+(blocking failures), gold-set counts (correct-and-useful / wrong /
+correct-but-bad-teaching), AI-vs-baseline valid-analog rate, a clean leakage
+check, and the paraphrase gap (recall on original vs accuracy on analog).
+
+---
+
+## 6. Desktop ↔ mobile sync (FULL two-way validation)
 
 **Conflict/merge rule (the actual behavior).** BrainLift state is stored in the
 Anki collection config and rides Anki's built-in collection sync; there is no
-custom merge — Anki's standard sync resolution applies (on divergence, a full
-sync prompts the user to keep one side; config is effectively last-writer-wins).
-All BrainLift state lives in the collection config + standard notes/cards, so it
-uses Anki's existing sync with no new transport.
+custom merge — Anki's standard sync resolution applies. On config divergence it
+is effectively **last-writer-wins** (the client whose change is uploaded last
+wins); on a structural divergence a full sync prompts the user to keep one side.
+All new AI state (`brainlift_calibration`, `brainlift_calibration_multiplier`,
+`brainlift_fatigue_session`, `brainlift_fatigue_test_mode`, `brainlift_ai_enabled`,
+`brainlift_ai_model`) lives in the collection config, so it syncs with no new
+transport.
 
-Validated that onboarding profile, cards, and per-topic coverage created on one
-client appear on the other after a normal sync.
+### Exact procedure to validate FULL two-way sync
+Pre-req: both the desktop app and the AnkiDroid build are logged into the SAME
+AnkiWeb account and have synced once so the collection matches.
+
+1. **Disjoint offline reviews (nothing lost / double-counted).**
+   - Put the phone in airplane mode; review **10** cards in the Exam P deck.
+   - On desktop (offline / don't sync yet); review **10 _different_** cards.
+   - Re-enable network. Sync desktop, then sync phone (or vice-versa).
+   - **Expected:** all **20** reviews are present on both devices; each card's
+     `reps` reflects exactly the reviews done (no card counted twice, none lost).
+     Verify via the coverage/`reps` counts (`select sum(reps) from cards`) — the
+     total increases by exactly 20 across the round-trip.
+2. **Same-card conflict (documented winner).**
+   - Offline on both devices, review the **same** card (e.g. rate it "Again" on
+     phone and "Easy" on desktop), and on desktop also run the confidence
+     calibration so `brainlift_calibration_multiplier` changes.
+   - Sync device A, then device B.
+   - **Expected (documented rule):** Anki's normal sync resolves the card to a
+     single consistent scheduling state across both devices (no duplicate review
+     log divergence after a full sync). For the BrainLift **config** values
+     (calibration multiplier, fatigue session), the value from the client that
+     synced **last** wins (last-writer-wins) and both devices then read that same
+     value. This is the intended, documented behavior — BrainLift adds no custom
+     merge.
+
+> Note: this environment has no `adb`/two live clients, so the round-trip was not
+> executed here; the design guarantee (all state in synced collection config,
+> last-writer-wins) is verified by construction and by the config round-trip unit
+> tests. Run the steps above on two real logged-in clients to confirm end-to-end.
 
 ---
 

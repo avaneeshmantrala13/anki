@@ -50,24 +50,33 @@ class DiagnosticDialog(QDialog):
 
     def _build(self) -> None:
         layout = QVBoxLayout()
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
 
         self.progress = QLabel()
-        self.progress.setStyleSheet("color:#6b6b70;")
+        self.progress.setStyleSheet(
+            "color: palette(mid); font-size: 12px; font-weight: 600;"
+            "letter-spacing: .5px;"
+        )
         layout.addWidget(self.progress)
 
         self.prompt = QLabel()
         self.prompt.setWordWrap(True)
-        self.prompt.setStyleSheet("font-size:15px; margin:8px 0;")
+        self.prompt.setStyleSheet("font-size:15px; font-weight:500; margin:8px 0;")
         layout.addWidget(self.prompt)
 
         self.choice_box = QGroupBox("Your answer")
         self.choice_layout = QVBoxLayout()
+        self.choice_layout.setSpacing(8)
+        self.choice_layout.setContentsMargins(12, 10, 12, 12)
         self.choice_box.setLayout(self.choice_layout)
         self.choice_group = QButtonGroup(self)
         layout.addWidget(self.choice_box)
 
         conf_box = QGroupBox("How confident are you?")
         conf_layout = QHBoxLayout()
+        conf_layout.setSpacing(16)
+        conf_layout.setContentsMargins(12, 10, 12, 12)
         self.conf_group = QButtonGroup(self)
         for i, (label, value) in enumerate(
             [
@@ -86,6 +95,7 @@ class DiagnosticDialog(QDialog):
         layout.addWidget(conf_box)
 
         self.next_btn = QPushButton("Next")
+        self.next_btn.setMinimumHeight(34)
         qconnect(self.next_btn.clicked, self._on_next)
         layout.addWidget(self.next_btn)
 

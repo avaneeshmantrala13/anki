@@ -44,6 +44,8 @@ class OnboardingDialog(QDialog):
         from anki.brainlift import onboarding as ob
 
         layout = QVBoxLayout()
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
 
         intro = QLabel(
             "Tell BrainLift about your Exam P plan. Everything here is used by "
@@ -51,9 +53,12 @@ class OnboardingDialog(QDialog):
             "time for durable learning or need to focus on the exam."
         )
         intro.setWordWrap(True)
+        intro.setStyleSheet("font-size: 13px; color: palette(mid);")
         layout.addWidget(intro)
 
         form = QFormLayout()
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(12)
 
         self.exam_date = QDateEdit()
         self.exam_date.setCalendarPopup(True)

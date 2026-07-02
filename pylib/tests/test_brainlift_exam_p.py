@@ -20,7 +20,7 @@ def test_syllabus_shape():
         "UnivariateRV",
         "MultivariateRV",
     ]
-    assert abs(sum(t.weight for t in exam_p.SYLLABUS) - 100.5) < 0.001
+    assert abs(sum(t.weight for t in exam_p.SYLLABUS) - 100.0) < 0.001
     # Topic search matches the topic tag OR any descendant tag.
     gp = exam_p.SYLLABUS[0]
     assert gp.search == '("tag:ExamP::GeneralProbability" OR "tag:ExamP::GeneralProbability::*")'
@@ -56,8 +56,8 @@ def test_coverage_and_status_mapping():
     assert multi.total_cards == 0
     assert multi.covered is False
 
-    # Weighted coverage = (13.5 + 43.5) / 100.5 * 100; Multivariate missing.
-    expected = (13.5 + 43.5) / 100.5 * 100.0
+    # Weighted coverage = (26.5 + 47.0) / 100.0 * 100; Multivariate missing.
+    expected = (26.5 + 47.0) / 100.0 * 100.0
     assert abs(report.coverage_percent - expected) < 0.01
 
     # Studying a card moves its topic to In Progress (deterministic, no FSRS
@@ -76,5 +76,5 @@ def test_weak_topics_orders_by_mastery_then_weight():
     report = exam_p.coverage_report(col)
     weak = report.weak_topics()
     # Only topics with cards are returned; both unmastered so heavier weight
-    # (Univariate, 43.5) ranks ahead of lighter (General, 13.5).
+    # (Univariate, 47.0) ranks ahead of lighter (General, 26.5).
     assert [t.key for t in weak] == ["UnivariateRV", "GeneralProbability"]

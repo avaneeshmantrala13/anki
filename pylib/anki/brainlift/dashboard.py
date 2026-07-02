@@ -224,37 +224,83 @@ def _timeline_rows(timeline: list[Milestone]) -> str:
 
 # Shared CSS for the dashboard body. Exposed so the desktop GUI can reuse it
 # when it embeds the dashboard beneath the guided "getting started" header.
+# Uses the BrainLift design tokens (same palette as the landing page, the
+# skinned Anki chrome, and the Android app) with dark-mode variants keyed off
+# Anki's night-mode classes.
 DASHBOARD_CSS = """
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
-          padding: 20px; background: #f5f6f8; color: #1d1d1f; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  .mode { color: #444; margin-bottom: 16px; font-size: 13px; }
-  .cards { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
-  .card { background: #fff; border-radius: 12px; padding: 16px 18px; flex: 1;
-           min-width: 220px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  .card-title { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
-                 color: #6b6b70; margin-bottom: 8px; }
-  .big { font-size: 34px; font-weight: 700; }
-  .big.muted { font-size: 22px; color: #b00020; }
-  .range { color: #555; font-size: 13px; margin-top: 2px; }
-  .sub { color: #6b6b70; font-size: 12px; margin-top: 8px; }
+  :root {
+    --bl-bg: #f6f7fb;
+    --bl-surface: #ffffff;
+    --bl-surface-2: #eef1f8;
+    --bl-border: #e4e7f0;
+    --bl-row-line: #eef0f6;
+    --bl-text: #1b1e28;
+    --bl-text-2: #575d70;
+    --bl-text-3: #8a90a3;
+    --bl-primary: #4f6bed;
+    --bl-warn: #b3590a;
+    --bl-shadow-card: 0 1px 2px rgba(18,22,45,.05), 0 1px 6px rgba(18,22,45,.04);
+  }
+  html.night-mode, body.nightMode {
+    --bl-bg: #13151c;
+    --bl-surface: #1c1f29;
+    --bl-surface-2: #262b38;
+    --bl-border: #2c3140;
+    --bl-row-line: #262b37;
+    --bl-text: #e8eaf3;
+    --bl-text-2: #a4aabc;
+    --bl-text-3: #737990;
+    --bl-primary: #7387f2;
+    --bl-warn: #e09a4e;
+    --bl-shadow-card: 0 1px 2px rgba(0,0,0,.4);
+  }
+  body { font-family: -apple-system, "Segoe UI Variable", "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif; margin: 0;
+          padding: 20px; background: var(--bl-bg); color: var(--bl-text);
+          -webkit-font-smoothing: antialiased; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.01em; }
+  .mode { color: var(--bl-text-2); margin-bottom: 16px; font-size: 13px; }
+  .cards { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 24px; }
+  .card { background: var(--bl-surface); border-radius: 12px; padding: 16px 18px;
+           flex: 1; min-width: 220px; border: 1px solid var(--bl-border);
+           box-shadow: var(--bl-shadow-card); }
+  .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+                 color: var(--bl-text-3); font-weight: 600; margin-bottom: 8px; }
+  .big { font-size: 32px; font-weight: 700; letter-spacing: -.02em;
+         font-variant-numeric: tabular-nums; }
+  .big.muted { font-size: 20px; font-weight: 600; color: var(--bl-text-3);
+               letter-spacing: 0; }
+  .range { color: var(--bl-text-2); font-size: 13px; margin-top: 2px;
+           font-variant-numeric: tabular-nums; }
+  .sub { color: var(--bl-text-2); font-size: 12px; margin-top: 8px;
+         line-height: 1.5; }
   ul.evidence, ul.missing { margin: 4px 0 0; padding-left: 18px; font-size: 12px;
-                             color: #555; }
-  ul.missing li { color: #b00020; }
-  h2 { font-size: 16px; margin: 24px 0 8px; }
-  table { width: 100%; border-collapse: collapse; background: #fff;
-           border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  th, td { text-align: left; padding: 9px 12px; font-size: 13px;
-            border-bottom: 1px solid #eee; }
-  th { background: #fafafa; color: #6b6b70; font-weight: 600; }
-  td.reasons { color: #555; font-size: 12px; }
+                             color: var(--bl-text-2); line-height: 1.6; }
+  ul.missing li { color: var(--bl-warn); }
+  h2 { font-size: 15px; margin: 26px 0 8px; letter-spacing: -.01em; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0;
+           background: var(--bl-surface); border: 1px solid var(--bl-border);
+           border-radius: 12px; overflow: hidden;
+           box-shadow: var(--bl-shadow-card); }
+  th, td { text-align: left; padding: 10px 14px; font-size: 13px;
+            border-bottom: 1px solid var(--bl-row-line);
+            font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  th { background: var(--bl-surface-2); color: var(--bl-text-3);
+       font-weight: 600; font-size: 11px; text-transform: uppercase;
+       letter-spacing: .06em; }
+  td.reasons { color: var(--bl-text-2); font-size: 12px; }
+  ul { line-height: 1.6; }
   .timeline { display: flex; gap: 12px; }
-  .milestone { background: #fff; border-radius: 10px; padding: 14px; flex: 1;
-                text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  .ms-label { font-size: 12px; color: #6b6b70; }
-  .ms-val { font-size: 26px; font-weight: 700; margin: 4px 0; }
-  .ms-cap { font-size: 11px; color: #999; }
-  .note { font-size: 11px; color: #999; margin-top: 6px; }
+  .milestone { background: var(--bl-surface); border-radius: 12px; padding: 14px;
+                flex: 1; text-align: center; border: 1px solid var(--bl-border);
+                box-shadow: var(--bl-shadow-card); }
+  .ms-label { font-size: 11px; color: var(--bl-text-3); font-weight: 600;
+              text-transform: uppercase; letter-spacing: .06em; }
+  .ms-val { font-size: 26px; font-weight: 700; margin: 4px 0;
+            letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .ms-cap { font-size: 11px; color: var(--bl-text-3); }
+  .note { font-size: 11px; color: var(--bl-text-3); margin-top: 8px; }
 """
 
 

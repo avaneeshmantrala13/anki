@@ -2,7 +2,7 @@
 
 **Chosen exam:** SOA **Exam P** (Probability) — readiness reported on the conventional **0–10 scale** (6 = pass).
 **Built on:** a fork of Anki at `SpeedRun/anki/` (branch `brainlift-mvp`) plus a fork of **AnkiDroid** for mobile.
-**AI used:** **None.** Every recommendation, score, plan, and bundled study card is produced (or sourced) by deterministic, transparent rules. The app is fully functional with zero AI services.
+**AI used:** the **core** (three scores, coverage, plan, bundled cards) is 100% deterministic and works with **zero AI services**. Two **opt-in** AI features sit on top behind a master toggle (`brainlift_ai_enabled`, default OFF): (1) metacognitive calibration analog-question generation, and (2) cognitive-load/fatigue detection. With AI OFF the app still fully produces Memory / Performance / Readiness and both features run via a deterministic fallback — a SpeedRunner hard requirement. See the "AI features" section below and `BRAINLIFT_AI_SPEC.md`.
 
 **Content source:** the study content bundled with the app is the official **SOA Exam P Sample Questions & Solutions**, freely published by the **Society of Actuaries** for candidates. Questions/solutions are reproduced for personal study; © Society of Actuaries. No content is AI-generated; classification into topics uses deterministic keyword rules only.
 
@@ -27,7 +27,7 @@ The three are never collapsed into one blended number.
 **How desktop and mobile actually share logic (honest wording).** Desktop and mobile share Anki's real Rust FSRS scheduler and the collection/sync layer. The new TopicMastery Rust RPC runs on desktop; AnkiDroid links the stock Anki backend and reimplements the same deterministic coverage/measurement aggregation in Kotlin (identical formulas, thresholds, and config shapes), so results match. Building the forked backend into AnkiDroid to call TopicMastery directly is documented future work. There is **not** a single shared BrainLift engine binary running on both platforms — what is shared is FSRS + the collection/sync layer and the exact deterministic formulas/thresholds/config shapes, mirrored in Python (desktop) and Kotlin (mobile).
 
 - **Rust core change — Topic Mastery & Coverage API.** New `StatsService.TopicMastery` proto RPC + Rust implementation (`rslib/src/stats/topic_mastery.rs`) that aggregates, per topic search, total/reviewed/mastered cards, total reviews, and average FSRS retrievability. Bound to Python as `Collection.topic_mastery(...)`. This RPC is called on **desktop**; AnkiDroid links the stock Anki backend and reproduces the identical aggregation in Kotlin (`BrainLiftEngine.kt`), so both platforms compute the same numbers for the same collection.
-- **Exam P topic model** (`pylib/anki/brainlift/exam_p.py`): the official syllabus as a typed hierarchy (3 main topics, 19 subtopics) with SOA weight midpoints (General Probability 13.5%, Univariate RV 43.5%, Multivariate RV 43.5%). Card→topic mapping is by Anki-native nested tags `ExamP::<Topic>::<Subtopic>`. `coverage_report()` classifies each topic **Not Started / In Progress / Covered / Mastered**.
+- **Exam P topic model** (`pylib/anki/brainlift/exam_p.py`): the official syllabus as a typed hierarchy (3 main topics, 19 subtopics) with SOA weight midpoints (General Probability 26.5%, Univariate RV 47.0%, Multivariate RV 26.5%). Card→topic mapping is by Anki-native nested tags `ExamP::<Topic>::<Subtopic>`. `coverage_report()` classifies each topic **Not Started / In Progress / Covered / Mastered**.
 - **Deterministic onboarding / diagnostic / planner / measurements / dashboard** (`pylib/anki/brainlift/*.py`): named thresholds, human-readable reasons, and an explicit **give-up rule** (readiness is withheld unless ≥200 graded reviews AND ≥50% coverage AND a completed diagnostic). All state is persisted in the collection config, so it rides Anki's existing sync and survives restarts.
 
 ---
@@ -66,6 +66,70 @@ python anki-analysis/build_examp_deck.py --emit-seed
 - Parity specifics: mastery counts a card only when its current FSRS retrievability is **>= 0.9** (desktop's live path passes `mastered_threshold=0.0`, which the Rust backend maps to its default `0.9`); the readiness give-up rule uses **total graded reviews = sum of card `reps` over `deck:*`** (a card answered 10× counts as 10), matching `dashboard._total_graded_reviews`.
 - The AnkiDroid fork was built and installed on an Android emulator; the BrainLift Exam P coverage view renders on device.
 - Study content and BrainLift state (onboarding, diagnostic, coverage) arrive on mobile via Anki sync, so no separate content bundling is required on Android.
+
+## NEW: Two AI features (opt-in; deterministic fallback keeps everything working)
+
+Both features are behind a master toggle `brainlift_ai_enabled` (default OFF) and
+their formulas/constants are specified once in **`BRAINLIFT_AI_SPEC.md`** and
+mirrored identically in Python (`pylib/anki/brainlift/`) and Kotlin
+(`AnkiDroid/.../brainlift/`). Parity is enforced by
+`pylib/tests/test_brainlift_calibration.py`, `test_brainlift_fatigue.py`, and the
+Kotlin `BrainLiftParityTest`. All new state lives in collection config, so it
+**syncs both ways**.
+
+### Feature 1 — Metacognitive calibration ("confidence authority")
+- Files: `pylib/anki/brainlift/ai.py`, `calibration.py`; desktop UI
+  `qt/aqt/brainlift/calibration_dialog.py`; mobile `BrainLiftAi.kt`,
+  `BrainLiftCalibration.kt` + a WebView flow in `BrainLiftHtml/Activity`.
+- Flow: rate confidence on **15** cards (`CALIBRATION_TEST_SIZE`, path to 50 via
+  `CALIBRATION_PRODUCTION_SIZE`) → answer **15** AI-generated analog MCQs → score.
+- **What AI does:** generate a reworded / re-parameterized analog MCQ per card via
+  OpenAI (`gpt-4o-mini` default, configurable). **Every generated item records
+  `source_card_id` + `source_text`** (named-source traceability).
+- **Algorithm (headline):** `deviation_i = |confidence_i − performance_i|`;
+  `accuracy = 1 − mean(deviation)`; secondary `gamma` (Goodman-Kruskal resolution
+  between JOLs and accuracy). Confidence scale: Highly confident 1.0 / Confident
+  0.85 / Kind of confident 0.6 / Unsure 0.3 / Guessing 0.0.
+- **Confidence-authority multiplier:**
+  `authority = 0.25 + 0.75 * clamp((accuracy − 0.5)/0.5, 0, 1)` (range 0.25–1.0),
+  persisted to synced config and applied in the planner as
+  `effective_mastery_gap = 1 − mastered_fraction * authority` — well-calibrated
+  learners fully suppress mastered topics; poorly-calibrated learners keep review
+  coverage. Documented as a candidate **second Rust engine change** (a scheduling
+  weighting hook); implemented in the BrainLift scheduling layer for the MVP.
+
+### Feature 2 — Cognitive-load / fatigue offload
+- Files: `pylib/anki/brainlift/fatigue.py` + `qt/aqt/brainlift/fatigue_hooks.py`;
+  mobile `BrainLiftFatigue.kt` wired into `Reviewer.answerCardInner`.
+- **Signals** per answer, EWMA-smoothed against a *slow* personal baseline
+  (α=0.05) to avoid the baseline "catching up" and masking drain: response-time
+  slowdown (0.40), accuracy drop (0.30), RT variability (0.15), post-error slowing
+  (0.15). Instantaneous drain is smoothed (α=0.30); anti-thrash cooldown of 10
+  answers between interventions.
+- **Thresholds:** intervene at smoothed drain ≥ 0.60; severe ≥ 0.80 overrides the
+  PROD timing gate. **Timing gate:** TEST MODE (`brainlift_fatigue_test_mode`,
+  default ON) → intervene immediately; PROD → wait ~90 min unless severe.
+- **Interventions (gradual):** ease difficulty (lower FSRS difficulty) or, on a
+  long same-topic streak (≥12), interleave the three sub-topics. A **visible
+  banner** always fires ("Cognitive offload — easing difficulty" / "…adding
+  variety").
+
+### AI robustness + eval
+- Key read **only** from `OPENAI_API_KEY` (never stored/committed). The OpenAI
+  client (desktop `requests`, mobile OkHttp — same REST call) wraps all network +
+  parsing in try/except and falls back to the deterministic generator
+  (`ok=false`); it never crashes and never blocks scoring.
+- Eval/proof harness: `brainlift_eval/` (see its README + committed `RESULTS.txt`) —
+  runs offline with no key (deterministic fixtures), `python3 run_all.py`. Latest run:
+  - **Held-out (20 items):** useful 85%, wrong 0% — **PASS** vs pre-declared cutoff
+    (wrong ≤10% AND useful ≥50%, decided before looking); failing items are blocked.
+  - **Gold set (50):** 38 correct-and-useful / 12 correct-but-bad-teaching / 0 wrong.
+  - **Baseline beat:** structured generator 33/50 valid re-parameterized analogs vs
+    keyword-retrieval baseline 0/50.
+  - **Leakage:** 0 true duplicates (near-verbatim + identical answer) — CLEAN.
+  - **Paraphrase gap:** original-recall 84.9% vs analog-accuracy 57.9% → **26.9%** gap.
+  - **Named-source traceability:** every generated item carries `source_card_id` +
+    `source_text`; the harness asserts this.
 
 ## Desktop ↔ mobile sync
 
