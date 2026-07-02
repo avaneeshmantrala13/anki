@@ -19,7 +19,7 @@ Anki's built-in collection sync (last-writer-wins on conflict).
 
 | Config key | Type | Default | Meaning |
 |---|---|---|---|
-| `brainlift_ai_enabled` | bool | `false` | Master AI toggle. OFF ⇒ no OpenAI calls; the three scores + both features still function via deterministic fallback. |
+| `brainlift_ai_enabled` | bool | `false` | Master AI toggle. OFF ⇒ no OpenAI calls **and** Feature 2 uses its deterministic drain heuristic; ON ⇒ Feature 1 analog generation may call OpenAI **and** Feature 2 uses the LEARNED fatigue model (§5.5, local weights, no network). The three scores + both features still function with it OFF via deterministic fallback. |
 | `brainlift_ai_model` | string | `gpt-4o-mini` | Chat-completions model (configurable). |
 | `brainlift_calibration` | object | absent | Feature 1 result record (see §3). |
 | `brainlift_calibration_multiplier` | float [0,1] | `1.0` | Confidence-authority multiplier read by the scheduling layer (§4). Mirrors `authority_multiplier` inside `brainlift_calibration`. |
@@ -169,7 +169,11 @@ Rolling per-session state, EWMA-smoothed. Persisted under
   "last_correct": true,
   "same_topic_streak": 0,     // consecutive answers in the current sub-topic
   "current_topic": "UnivariateRV",
-  "smoothed_drain": 0.0,      // EWMA of instantaneous drain
+  "smoothed_drain": 0.0,      // EWMA of instantaneous drain (deterministic fallback)
+  "sf_slowdown": 0.0,         // EWMA of normalized slowdown  (learned-model feature)
+  "sf_accdrop": 0.0,          // EWMA of normalized accuracy-drop
+  "sf_var": 0.0,              // EWMA of normalized RT-variability
+  "sf_posterr": 0.0,          // EWMA of normalized post-error slowing
   "answers_since_intervention": 999
 }
 ```
@@ -234,16 +238,92 @@ drain = clamp(
   + W_VAR*norm(var_ratio,1.0,1.7)      + W_POSTERR*norm(posterr,1.0,1.5), 0, 1)
 smoothed_drain = (1-DRAIN_ALPHA)*smoothed_drain + DRAIN_ALPHA*drain
 ```
+The four normalized signals above are ALSO EWMA-smoothed individually (same
+`DRAIN_ALPHA`) into `sf_slowdown, sf_accdrop, sf_var, sf_posterr` — these feed
+the learned model (§5.5). `smoothed_drain` itself is unchanged (deterministic
+fallback).
+
+### 5.5 Learned fatigue model (LEARNED classifier — the Feature 2 upgrade)
+
+The decision of **WHEN drain is happening** is made by a small, interpretable
+**learned logistic-regression classifier** that predicts the probability the
+user is in a cognitively-drained / struggling state. It replaces the fixed
+`drain >= 0.60` trigger whenever the master AI toggle (`brainlift_ai_enabled`)
+is ON; with the toggle OFF (or on any model issue) the engine falls back to the
+deterministic `smoothed_drain` heuristic above. Both paths always produce a
+decision — the app never crashes and never blocks the three scores.
+
+**Training data — HONEST caveat.** The model is trained **OFFLINE in Python** on
+a **research-grounded SIMULATED** dataset (there is no live student data). The
+simulator (`brainlift_eval/fatigue_sim.py`) draws "fresh" vs "drained" study
+sessions whose per-answer effect sizes are calibrated to three peer-reviewed
+papers (the **named source** for the model):
+* **Fortenbaugh et al. 2015** (*Psychological Science*) — sustained attention /
+  vigilance decrement: RT slowing and rising RT variability with time-on-task.
+* **Hanzal et al. 2024** (*PLOS ONE*, SART) — state fatigue tightly coupled to an
+  accuracy decrement.
+* **Hassanzadeh-Behbaha et al. 2018** (*Frontiers in Psychology*) — vigilance
+  decrement and progressive RT slowing across successive task blocks.
+
+Per-user online adaptation on real response streams is explicit **future work**.
+
+**Features (order fixed; all in [0,1]):**
+```
+FATIGUE_MODEL_FEATURES = ["slowdown", "accdrop", "rt_var", "post_error", "session_pos"]
+  slowdown, accdrop, rt_var, post_error = the EWMA-smoothed normalized signals
+                                          (sf_slowdown, sf_accdrop, sf_var, sf_posterr)
+  session_pos = norm(session_minutes, 0, PROD_MIN_MINUTES)   # time-on-task position
+```
+
+**Weights (shipped constants; produced by `brainlift_eval/train_fatigue_model.py`
+and copied VERBATIM into `fatigue.py` and `BrainLiftFatigue.kt`):**
+```
+FATIGUE_MODEL_VERSION = "logreg-sim-v1"
+FATIGUE_MODEL_BIAS    = -4.125162
+FATIGUE_MODEL_WEIGHTS = [ 4.943704,   # slowdown
+                          3.092085,   # accdrop
+                          0.795880,   # rt_var
+                          1.538849,   # post_error
+                          3.579352 ]  # session_pos
+```
+All weights are positive and interpretable: RT slowdown dominates, followed by
+time-on-task position and accuracy drop, then post-error slowing and RT
+variability — consistent with the three papers.
+
+**Inference (byte-identical desktop + mobile):**
+```
+z = FATIGUE_MODEL_BIAS + Σ_i FATIGUE_MODEL_WEIGHTS[i] * features[i]
+p = sigmoid(z) = 1 / (1 + exp(-z))          # numerically-stable form
+```
+
+**Pre-declared decision thresholds** (on the learned probability `p`):
+```
+MODEL_INTERVENE = 0.50    # replaces DRAIN_INTERVENE when AI is ON
+MODEL_SEVERE    = 0.80    # replaces SEVERE_DRAIN for the PROD timing-gate override
+```
+
+**Offline eval (`brainlift_eval/fatigue_model_eval.py`, wired into `run_all.py`):**
+held-out **accuracy 0.9067**, **AUC 0.9706**, **log-loss 0.2914** on 600 disjoint
+simulated sessions — clearing the **pre-declared** cutoff (accuracy ≥ 0.80 AND
+AUC ≥ 0.85, decided before looking). It **beats the previous fixed-threshold
+heuristic** on the same held-out set (heuristic accuracy 0.5283 / AUC 0.9242) and
+passes a **train/test separation (leakage) check** (train seed 12345 vs test seed
+98765; zero overlapping feature vectors).
 
 ## 6. Intervention decision (Feature 2)
 ```
+use_model = brainlift_ai_enabled AND model loads OK   # else deterministic fallback
+
+if use_model: score = p(drained);   intervene_cut = MODEL_INTERVENE; severe_cut = MODEL_SEVERE
+else:         score = smoothed_drain; intervene_cut = DRAIN_INTERVENE; severe_cut = SEVERE_DRAIN
+
 if answers < MIN_ANSWERS_BEFORE_DETECT: no intervention
 if answers_since_intervention < INTERVENTION_COOLDOWN: no intervention (anti-thrash)
 
 session_minutes = (now - session_start)/60
-timing_ok = test_mode OR session_minutes >= PROD_MIN_MINUTES OR smoothed_drain >= SEVERE_DRAIN
+timing_ok = test_mode OR session_minutes >= PROD_MIN_MINUTES OR score >= severe_cut
 
-if timing_ok AND smoothed_drain >= DRAIN_INTERVENE:
+if timing_ok AND score >= intervene_cut:
     if same_topic_streak >= SAME_TOPIC_STREAK_LIMIT:
         type = "interleave";      banner = "Cognitive offload deemed necessary — adding variety"
     else:
@@ -253,6 +333,11 @@ if timing_ok AND smoothed_drain >= DRAIN_INTERVENE:
 else:
     no intervention
 ```
+The learned model decides **WHEN** drain is happening; the rest of the machinery
+(cooldown, min-answers, timing gate, interleave-vs-ease selection, banner) is
+unchanged and shared by both paths. `FatigueDecision` also carries
+`probability` (the learned `p`) and `used_model` (whether the model or the
+fallback drove the decision).
 - `ease_difficulty`: reviewer serves easier cards (lower FSRS difficulty) —
   "very gradually": pick from the easier half of due cards.
 - `interleave`: reviewer pulls the next card from a *different* Exam P sub-topic.

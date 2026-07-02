@@ -118,12 +118,20 @@ syncs. Formulas are mirrored in Python + Kotlin and parity-tested.
 - fatigue: warmup, steady=no drain, degradation triggers in TEST MODE, PROD
   timing gate blocks moderate early drain, severe overrides gate, interleave on
   long same-topic streak, cooldown prevents thrash, persisted/synced session
+- **fatigue LEARNED model:** `sigmoid` numerically stable; `predict_drain_probability`
+  matches locked reference vectors (parity anchor); `model_feature_vector` shape +
+  session-position; model flags a drained (not fresh) session with `used_model=True`;
+  **AI-off falls back to the deterministic heuristic** (`used_model=False`);
+  malformed weights → `model_probability` returns `None` → clean fallback (no crash);
+  `record_answer` uses the model iff `brainlift_ai_enabled` is ON
 
 ```bash
 cd SpeedRun/anki/pylib
 PYTHONPATH="$(pwd):$(pwd)/../out/pylib" ../out/pyenv/bin/python -m pytest -q \
   tests/test_brainlift_calibration.py tests/test_brainlift_fatigue.py
-# Result (this batch): 22 passed. Full BrainLift suite: 58 passed.
+# Result (this batch): calibration + fatigue pass (fatigue now 17 tests incl. the
+# learned-model inference / decision-integration / AI-off-fallback cases).
+# Full BrainLift suite: 75 passed.
 ```
 
 **Mobile parity test** (`AnkiDroid/.../brainlift/BrainLiftParityTest.kt`) asserts
@@ -142,13 +150,31 @@ for GPT via fixtures); a live key + `--live` exercises real generation.
 
 ```bash
 cd SpeedRun/anki
-python brainlift_eval/run_all.py            # held-out eval, gold counts, baseline, leakage, paraphrase gap
+python brainlift_eval/run_all.py            # held-out eval, gold counts, baseline, leakage, paraphrase gap, fatigue model
 OPENAI_API_KEY=sk-... python brainlift_eval/run_all.py --live   # real GPT
+python brainlift_eval/train_fatigue_model.py   # (re)train the Feature 2 model offline, prints shipped weights
 ```
 Proves: named-source traceability, held-out accuracy vs a **pre-declared** cutoff
 (blocking failures), gold-set counts (correct-and-useful / wrong /
 correct-but-bad-teaching), AI-vs-baseline valid-analog rate, a clean leakage
 check, and the paraphrase gap (recall on original vs accuracy on analog).
+
+**Feature 2 learned fatigue model (`fatigue_model_eval.py`, wired into `run_all.py`).**
+The drain decision is now a **logistic-regression classifier** trained OFFLINE
+(`train_fatigue_model.py`) on a **research-grounded SIMULATED** dataset
+(`fatigue_sim.py`; effect sizes calibrated to Fortenbaugh 2015 / Hanzal 2024 /
+Hassanzadeh-Behbaha 2018 — the model's **named source**). Its weights ship as
+shared constants (`BRAINLIFT_AI_SPEC.md §5.5`) so desktop and mobile run
+byte-identical inference. The eval reports the **shipped** model's held-out
+**accuracy 0.9067 / AUC 0.9706 / log-loss 0.2914** against a **pre-declared**
+cutoff (accuracy ≥ 0.80 AND AUC ≥ 0.85, decided before looking), proves it
+**beats the previous fixed-threshold heuristic** on the same held-out set
+(0.5283 / 0.9242), runs a **train/test separation (leakage) check** (train seed
+12345 vs test seed 98765; 0 overlapping vectors), and asserts the three papers
+are documented. Honesty: the model is trained on **simulated** data (no live
+students); per-user online adaptation on real streams is future work. With
+`brainlift_ai_enabled` OFF (or on any model issue) the engine falls back to the
+deterministic drain heuristic — the three scores always compute.
 
 **Leakage gate (regenerate-then-block).** `leakage_check.py` scans the **served
 (post-gate)** set. The generation pipeline (`anki.brainlift.ai.generate_gated_analog`,

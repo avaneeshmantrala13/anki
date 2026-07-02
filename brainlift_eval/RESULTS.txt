@@ -1,5 +1,6 @@
 
 
+
 ====================================================================
 == Held-out eval ==
 generator: deterministic(no-key fixtures)
@@ -50,10 +51,35 @@ paraphrase gap:           26.9%
 Interpretation: positive gap => memory on the original overstates true concept performance (motivates the confidence-authority down-weighting).
 
 ====================================================================
+== Fatigue model — held-out eval (LEARNED logistic regression) ==
+model: logreg-sim-v1  bias=-4.1252
+    w[slowdown   ] = +4.9437
+    w[accdrop    ] = +3.0921
+    w[rt_var     ] = +0.7959
+    w[post_error ] = +1.5388
+    w[session_pos] = +3.5794
+training data: research-grounded SIMULATED sessions (NOT live students)
+  named sources: Fortenbaugh 2015, Hanzal 2024, Hassanzadeh-Behbaha 2018
+held-out sessions: 600 (seed=98765); train sessions: 1600 (seed=12345)
+-- learned model --
+  accuracy @ 0.50: 0.9067
+  AUC:               0.9706
+  log-loss:          0.2914
+PRE-DECLARED cutoffs: accuracy >= 0.80 AND AUC >= 0.85
+-- baseline: previous fixed-threshold heuristic (drain >= 0.60) --
+  accuracy: 0.5283   AUC: 0.9242
+  learned model BEATS baseline: True (acc +0.3783, AUC +0.0464)
+-- integrity --
+  train/test separation (no leakage): True (overlapping held-out vectors: 0)
+  named-source documented in BRAINLIFT_AI_SPEC.md: True
+RESULT: PASS
+
+====================================================================
 SUMMARY
   held_out_eval         : PASS
   gold_eval             : PASS
   baseline_comparison   : PASS
   leakage_check         : PASS
   paraphrase_gap        : PASS
+  fatigue_model_eval    : PASS
 OVERALL: PASS

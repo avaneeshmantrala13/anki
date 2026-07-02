@@ -21,6 +21,8 @@ python3 gold_eval.py       # 50-card gold-set bucket counts
 python3 baseline.py        # structured/AI generator vs keyword baseline
 python3 leakage_check.py   # near-duplicate / leakage scan vs the gold set
 python3 paraphrase_gap.py  # original-recall vs analog-accuracy gap
+python3 fatigue_model_eval.py    # Feature 2 LEARNED fatigue model: held-out acc/AUC/log-loss
+python3 train_fatigue_model.py   # (re)train the Feature 2 model offline; prints shipped weights
 ```
 
 Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
@@ -34,7 +36,10 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 | `baseline.py` | AI beats a simpler baseline at valid analogs | Structured generator vs a keyword-retrieval baseline; metric = valid re-parameterized analogs. |
 | `leakage_check.py` | Leakage scan is clean | Scans the **served (post-gate) set**. The generation pipeline runs a leakage gate (regenerate-then-block); this check flags an analog only when it is near-verbatim **and** resolves to the same answer as a gold item, and reports how many raw items leaked / were caught-and-regenerated / were blocked. |
 | `paraphrase_gap.py` | Performance != memory | Compares original-card recall vs reworded-analog accuracy over 30 cards. |
-| every script | Named-source traceability | Each generated item carries `source_card_id` + `source_text`; scripts assert it is present. |
+| `fatigue_model_eval.py` | **Feature 2 learned model** meets the AI bar | Held-out **accuracy / AUC / log-loss** of the SHIPPED logistic-regression fatigue model vs a **pre-declared** cutoff (acc ≥ 0.80 AND AUC ≥ 0.85); **baseline beat** vs the previous fixed-threshold heuristic on the same held-out set; **train/test separation (leakage) check**; asserts the three named papers are documented. |
+| `train_fatigue_model.py` | Offline training is reproducible | Trains the logistic regression (pure-Python GD, fixed seed) on research-grounded simulated sessions and prints the shipped bias/weights verbatim. |
+| `fatigue_sim.py` | Honest, research-grounded data | Generates the SIMULATED labeled sessions (effect sizes calibrated to Fortenbaugh 2015 / Hanzal 2024 / Hassanzadeh-Behbaha 2018); folds them through the shipped feature pipeline. |
+| every script | Named-source traceability | Each generated item carries `source_card_id` + `source_text`; scripts assert it is present. The fatigue model's named source is the three peer-reviewed papers (asserted present in the spec). |
 
 ## Key design points
 
@@ -76,3 +81,16 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 - Baseline: structured 33/50 valid analogs vs keyword baseline 0/50 -> **structured BEATS**
 - Leakage (served/post-gate set): 0 true duplicates -> **CLEAN** (0 raw-leaked, 0 regenerated, 0 blocked offline; the gate catches live-model leaks)
 - Paraphrase gap: original 84.9% vs analog 57.9% -> **26.9% gap**
+- Fatigue model (Feature 2, learned): held-out **acc 0.9067 / AUC 0.9706 / log-loss 0.2914** -> **PASS** (pre-declared acc >=0.80, AUC >=0.85); **beats** fixed-threshold heuristic (0.5283 / 0.9242); train/test separation clean (0 overlap)
+
+## Feature 2 fatigue model — honesty note
+
+The Feature 2 drain decision is a **learned logistic-regression classifier**
+(`anki.brainlift.fatigue`), NOT a hand-tuned threshold. Because there is no live
+student data, it is trained **offline** on a **research-grounded SIMULATED**
+dataset whose per-answer effect sizes are calibrated to three peer-reviewed
+papers (Fortenbaugh et al. 2015; Hanzal et al. 2024; Hassanzadeh-Behbaha et al.
+2018). The weights ship as shared constants (`BRAINLIFT_AI_SPEC.md §5.5`) so
+desktop (Python) and mobile (Kotlin) run byte-identical inference. Per-user
+online adaptation on real response streams is explicit future work. With the AI
+toggle OFF the engine falls back to the original deterministic drain heuristic.

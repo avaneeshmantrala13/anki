@@ -37,13 +37,28 @@ deterministic fallback — a hard requirement. Formulas are specified once in
    (well-calibrated learners keep authority; poorly-calibrated learners keep more
    review coverage). The multiplier persists in synced config and feeds the
    scheduler on both platforms.
-2. **Cognitive-load / fatigue offload.** During a session we detect drain from
-   per-question response time vs a slow personal baseline, accuracy drop, RT
-   variability, and post-error slowing (EWMA-smoothed, anti-thrash cooldown).
-   When drained we *gradually* ease difficulty or interleave the three sub-topics,
-   and always show a visible banner ("Cognitive offload — easing difficulty" /
-   "…adding variety"). A TEST MODE config flag fires interventions immediately;
-   in PROD they wait ~1–2 h unless the learner is clearly struggling severely.
+2. **Cognitive-load / fatigue offload (a LEARNED model).** A small **logistic
+   regression** decides *when* the learner is cognitively drained, from five
+   research-grounded features (EWMA-smoothed normalized response-time slowdown,
+   accuracy drop, RT variability, post-error slowing, and session-time position).
+   It is trained **offline in Python** and its **weights ship as shared constants**
+   so desktop and mobile run **byte-identical** inference (`p = sigmoid(bias +
+   w·features)`; see `BRAINLIFT_AI_SPEC.md §5.5`). Honest caveat: with no live
+   student data the model is trained on a **research-grounded SIMULATED** dataset
+   calibrated to three peer-reviewed papers (Fortenbaugh 2015, Hanzal 2024,
+   Hassanzadeh-Behbaha 2018 — the model's *named source*); per-user online
+   adaptation on real streams is future work. The learned probability replaces
+   the old fixed drain threshold; when drained we *gradually* ease difficulty or
+   interleave the three sub-topics and always show a visible banner ("Cognitive
+   offload — easing difficulty" / "…adding variety"). The model runs only when the
+   AI toggle is ON (local weights, no network); with it **OFF** — or on any model
+   issue — the engine falls back to the original deterministic drain heuristic, so
+   the three scores always compute. A TEST MODE flag fires interventions
+   immediately; in PROD they wait ~1–2 h unless the learner is struggling severely.
+   Offline eval (`brainlift_eval/fatigue_model_eval.py`): held-out accuracy 0.9067
+   / AUC 0.9706 / log-loss 0.2914 vs a pre-declared cutoff (acc ≥ 0.80, AUC ≥
+   0.85), beating the previous fixed-threshold heuristic (0.5283 / 0.9242) with a
+   clean train/test separation check.
 
 The key is read **only** from the `OPENAI_API_KEY` environment variable (never
 stored or committed). The OpenAI client degrades gracefully (offline /

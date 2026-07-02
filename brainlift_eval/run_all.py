@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 
 import baseline
+import fatigue_model_eval
 import gold_eval
 import leakage_check
 import paraphrase_gap
@@ -28,6 +29,7 @@ def main() -> int:
         ("baseline_comparison", lambda: baseline.run(live)),
         ("leakage_check", lambda: leakage_check.run(live)),
         ("paraphrase_gap", paraphrase_gap.run),
+        ("fatigue_model_eval", lambda: fatigue_model_eval.run(live)),
     ]:
         print("\n" + "=" * 68)
         results[name] = bool(fn())

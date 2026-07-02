@@ -2,7 +2,7 @@
 
 **Chosen exam:** SOA **Exam P** (Probability) — readiness reported on the conventional **0–10 scale** (6 = pass).
 **Built on:** a fork of Anki at `SpeedRun/anki/` (branch `brainlift-mvp`) plus a fork of **AnkiDroid** for mobile.
-**AI used:** the **core** (three scores, coverage, plan, bundled cards) is 100% deterministic and works with **zero AI services**. Two **opt-in** AI features sit on top behind a master toggle (`brainlift_ai_enabled`, default OFF): (1) metacognitive calibration analog-question generation, and (2) cognitive-load/fatigue detection. With AI OFF the app still fully produces Memory / Performance / Readiness and both features run via a deterministic fallback — a SpeedRunner hard requirement. See the "AI features" section below and `BRAINLIFT_AI_SPEC.md`.
+**AI used:** the **core** (three scores, coverage, plan, bundled cards) is 100% deterministic and works with **zero AI services**. Two **opt-in** AI features sit on top behind a master toggle (`brainlift_ai_enabled`, default OFF): (1) metacognitive calibration analog-question generation (OpenAI), and (2) cognitive-load/fatigue detection driven by a **learned logistic-regression classifier** (trained offline on research-grounded simulated data; weights ship as shared constants for byte-identical desktop/mobile inference — no network needed). With AI OFF the app still fully produces Memory / Performance / Readiness and both features run via a deterministic fallback — a SpeedRunner hard requirement. See the "AI features" section below and `BRAINLIFT_AI_SPEC.md`.
 
 **Content source:** the study content bundled with the app is the official **SOA Exam P Sample Questions & Solutions**, freely published by the **Society of Actuaries** for candidates. Questions/solutions are reproduced for personal study; © Society of Actuaries. No content is AI-generated; classification into topics uses deterministic keyword rules only.
 
@@ -98,21 +98,43 @@ Kotlin `BrainLiftParityTest`. All new state lives in collection config, so it
   coverage. Documented as a candidate **second Rust engine change** (a scheduling
   weighting hook); implemented in the BrainLift scheduling layer for the MVP.
 
-### Feature 2 — Cognitive-load / fatigue offload
+### Feature 2 — Cognitive-load / fatigue offload (now a LEARNED model)
 - Files: `pylib/anki/brainlift/fatigue.py` + `qt/aqt/brainlift/fatigue_hooks.py`;
-  mobile `BrainLiftFatigue.kt` wired into `Reviewer.answerCardInner`.
-- **Signals** per answer, EWMA-smoothed against a *slow* personal baseline
-  (α=0.05) to avoid the baseline "catching up" and masking drain: response-time
-  slowdown (0.40), accuracy drop (0.30), RT variability (0.15), post-error slowing
-  (0.15). Instantaneous drain is smoothed (α=0.30); anti-thrash cooldown of 10
-  answers between interventions.
-- **Thresholds:** intervene at smoothed drain ≥ 0.60; severe ≥ 0.80 overrides the
-  PROD timing gate. **Timing gate:** TEST MODE (`brainlift_fatigue_test_mode`,
-  default ON) → intervene immediately; PROD → wait ~90 min unless severe.
-- **Interventions (gradual):** ease difficulty (lower FSRS difficulty) or, on a
-  long same-topic streak (≥12), interleave the three sub-topics. A **visible
-  banner** always fires ("Cognitive offload — easing difficulty" / "…adding
-  variety").
+  mobile `BrainLiftFatigue.kt` wired into `Reviewer.answerCardInner`. Offline
+  trainer + eval in `brainlift_eval/{fatigue_sim,train_fatigue_model,fatigue_model_eval}.py`.
+- **The drain DECISION is now a learned classifier.** A small, interpretable
+  **logistic regression** predicts `p(user is cognitively drained)` from five
+  research-grounded features: EWMA-smoothed normalized **slowdown, accuracy-drop,
+  RT-variability, post-error slowing**, plus **session-time position**. It is
+  trained **OFFLINE in Python**; its **weights ship as shared constants** so
+  desktop (Python) and mobile (Kotlin) run **byte-identical** inference
+  (`p = sigmoid(bias + w·features)`). Feature order + weights + threshold live in
+  `BRAINLIFT_AI_SPEC.md §5.5` and are copied verbatim into both engines.
+- **Training data — honest caveat:** there is no live student data, so the model
+  is trained on a **research-grounded SIMULATED** dataset whose effect sizes are
+  calibrated to three peer-reviewed papers (the model's **named source**):
+  Fortenbaugh et al. 2015 (*Psych Science*; vigilance decrement, RT slowing/variability),
+  Hanzal et al. 2024 (*PLOS ONE*, SART; state fatigue ↔ accuracy drop), and
+  Hassanzadeh-Behbaha et al. 2018 (*Frontiers Psych*; progressive RT slowing).
+  Per-user online adaptation on real streams is explicit **future work**.
+- **Learned probability replaces the fixed 0.60 threshold** as the intervention
+  trigger (decision threshold `MODEL_INTERVENE = 0.50`, severe `0.80`). The rest
+  of the machinery is unchanged: EWMA smoothing, 10-answer cooldown, ≥6-answers
+  minimum, the timing gate (TEST MODE / ~90 min / severe), sub-topic interleaving
+  + easier-by-FSRS-difficulty actions, and the **visible banner**.
+- **AI-OFF fallback:** the model runs only when the master toggle
+  `brainlift_ai_enabled` is ON (local weights, **no network/key** needed). With it
+  OFF — or on any model-load issue — the engine falls back cleanly to the original
+  **deterministic weighted-signal drain heuristic** (slowdown 0.40 / accuracy drop
+  0.30 / RT variability 0.15 / post-error 0.15, smoothed drain ≥ 0.60). Both paths
+  always produce a decision and the three scores; it never crashes or blocks scoring.
+- **Offline eval (`brainlift_eval/fatigue_model_eval.py`, wired into `run_all.py`):**
+  held-out **accuracy 0.9067 / AUC 0.9706 / log-loss 0.2914** on 600 disjoint
+  simulated sessions — clearing the **pre-declared** cutoff (accuracy ≥ 0.80 AND
+  AUC ≥ 0.85). **Beats the previous fixed-threshold heuristic** on the same
+  held-out set (heuristic accuracy 0.5283 / AUC 0.9242) and passes a **train/test
+  separation (leakage) check** (train seed 12345 vs test seed 98765; 0 overlapping
+  vectors). Kotlin==Python inference is asserted by `BrainLiftParityTest`.
 
 ### AI robustness + eval
 - Key read **only** from `OPENAI_API_KEY` (never stored/committed). The OpenAI
@@ -137,6 +159,11 @@ Kotlin `BrainLiftParityTest`. All new state lives in collection config, so it
     0 / 0 / 0; the gate is what removes the occasional live-model copy — e.g. the
     gpt-4o-mini leak on source card `m06`).
   - **Paraphrase gap:** original-recall 84.9% vs analog-accuracy 57.9% → **26.9%** gap.
+  - **Fatigue model (Feature 2, learned):** held-out **accuracy 0.9067 / AUC 0.9706
+    / log-loss 0.2914** vs pre-declared cutoff (acc ≥ 0.80 AND AUC ≥ 0.85);
+    **beats** the old fixed-threshold heuristic (0.5283 / 0.9242) on the same
+    held-out set; train/test separation clean (0 overlap); the three named papers
+    are asserted present in the spec. `OVERALL: PASS`.
   - **Named-source traceability:** every generated item carries `source_card_id` +
     `source_text`; the harness asserts this.
 

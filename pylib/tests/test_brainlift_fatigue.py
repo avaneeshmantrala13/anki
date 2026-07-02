@@ -117,3 +117,98 @@ def test_test_mode_toggle_persists():
     assert fx.test_mode(col) is False
     fx.set_test_mode(col, True)
     assert fx.test_mode(col) is True
+
+
+# --- learned fatigue model (Feature 2 upgrade) ------------------------------
+
+
+def test_sigmoid_matches_reference():
+    assert abs(fx.sigmoid(0.0) - 0.5) < 1e-12
+    # numerically stable at extremes (no overflow)
+    assert fx.sigmoid(1000.0) == 1.0
+    assert fx.sigmoid(-1000.0) == 0.0
+
+
+def test_predict_drain_probability_reference_vectors():
+    # Locked reference values (parity anchor with Kotlin BrainLiftParityTest).
+    cases = [
+        ([0.0, 0.0, 0.0, 0.0, 0.0], 0.015903856063),
+        ([1.0, 1.0, 1.0, 1.0, 1.0], 0.999945904638),
+        ([0.6, 0.4, 0.3, 0.2, 0.5], 0.917896515624),
+        ([0.2, 0.1, 0.05, 0.0, 0.1], 0.080951885817),
+        ([0.9, 0.8, 0.6, 0.5, 0.9], 0.999301731886),
+    ]
+    for feats, expected in cases:
+        assert abs(fx.predict_drain_probability(feats) - expected) < 1e-9
+
+
+def test_model_feature_vector_shape_and_session_pos():
+    state = fx.new_session(now=0)
+    state = _steady(state, 8, rt=3.0, correct=True)
+    feats = fx.model_feature_vector(state, now=45 * 60)  # 45 min in
+    assert len(feats) == len(fx.FATIGUE_MODEL_FEATURES)
+    # session_pos = norm(45, 0, 90) = 0.5
+    assert abs(feats[4] - 0.5) < 1e-9
+    assert all(0.0 <= f <= 1.0 for f in feats)
+
+
+def test_model_flags_drained_but_not_fresh_session():
+    fresh = fx.new_session(now=0)
+    fresh = _steady(fresh, 15, rt=3.0, correct=True)
+    d_fresh = fx.decide(fresh, test_mode=True, now=60, use_model=True)
+    assert d_fresh.used_model is True
+    assert d_fresh.intervene is False
+    assert d_fresh.probability < fx.MODEL_INTERVENE
+
+    drained = fx.new_session(now=0)
+    drained = _steady(drained, 8, rt=2.0, correct=True)
+    drained = _steady(drained, 8, rt=9.0, correct=False)
+    d_drain = fx.decide(drained, test_mode=True, now=120, use_model=True)
+    assert d_drain.used_model is True
+    assert d_drain.intervene is True
+    assert d_drain.probability >= fx.MODEL_INTERVENE
+    assert d_drain.type in (fx.TYPE_EASE, fx.TYPE_INTERLEAVE)
+
+
+def test_ai_off_uses_deterministic_heuristic():
+    # AI OFF (use_model=False) must behave EXACTLY like the original heuristic.
+    state = fx.new_session(now=0)
+    state = _steady(state, 15, rt=3.0, correct=True)
+    d = fx.decide(state, test_mode=True, now=60, use_model=False)
+    assert d.used_model is False
+    assert d.probability == 0.0
+    assert d.intervene is False
+
+
+def test_model_falls_back_cleanly_on_bad_weights(monkeypatch):
+    # A malformed model must NOT crash — model_probability returns None and the
+    # decision falls back to the deterministic heuristic.
+    monkeypatch.setattr(fx, "FATIGUE_MODEL_WEIGHTS", (1.0, 2.0))  # wrong length
+    state = fx.new_session(now=0)
+    state = _steady(state, 8, rt=2.0, correct=True)
+    state = _steady(state, 8, rt=9.0, correct=False)
+    assert fx.model_probability(state, now=120) is None
+    d = fx.decide(state, test_mode=True, now=120, use_model=True)
+    assert d.used_model is False           # fell back
+    assert d.intervene is True             # heuristic still fires on this state
+
+
+def test_record_answer_uses_model_when_ai_enabled():
+    from anki.brainlift import ai as blai
+
+    col = getEmptyCol()
+    blai.set_ai_enabled(col, True)
+    assert fx.model_enabled(col) is True
+    fx.reset_session(col, now=0)
+    d = None
+    for _ in range(6):
+        d = fx.record_answer(col, 3.0, True, "UnivariateRV", now=10)
+    assert d is not None
+    assert d.used_model is True            # model path taken with AI ON
+
+    # AI OFF -> deterministic path
+    blai.set_ai_enabled(col, False)
+    assert fx.model_enabled(col) is False
+    fx.reset_session(col, now=0)
+    d2 = fx.record_answer(col, 3.0, True, "UnivariateRV", now=10)
+    assert d2.used_model is False
