@@ -115,8 +115,11 @@ html, body {
 }
 /* Card content rendered by Anki's own templates. Force a legible white card
    surface with dark text regardless of theme (matches the reviewer's look). */
+/* Always a white surface with dark text (like a printed question), regardless
+   of theme — never var(--cal-surface), which is dark in night mode and made the
+   forced-dark card text invisible (the reported "greyed/illegible" bug). */
 .cal-card {
-  background: var(--cal-surface); border: 1px solid var(--cal-border);
+  background: #ffffff !important; border: 1px solid #d7dcea;
   border-radius: 12px; padding: 18px 20px; margin: 0 0 16px;
   box-shadow: 0 1px 3px rgba(15,20,45,.08); overflow-x: auto;
 }
@@ -357,15 +360,17 @@ def build_score_html(
     )
 
 
-def shell_html() -> str:
+def shell_html(initial: str = "") -> str:
     """The one-time page shell: a content host + JS helpers (defines pycmd flow).
 
-    Loaded once with MathJax; subsequent steps just swap ``#bl-content`` and
-    re-typeset, so MathJax isn't reloaded per step.
+    ``initial`` is the first step's HTML, embedded server-side so the very first
+    paint needs no ``eval`` (avoids a race where ``blRender`` was called before
+    the shell's script had parsed, leaving a blank window). Loaded once with
+    MathJax; subsequent steps swap ``#bl-content`` via ``blRender`` and re-typeset.
     """
     return (
         f"<style>{CALIBRATION_CSS}</style>"
-        "<div id='bl-content'></div>"
+        f"<div id='bl-content'>{initial}</div>"
         "<script>"
         "function blTypeset(){try{if(window.MathJax&&MathJax.startup&&"
         "MathJax.typesetPromise){MathJax.startup.promise.then(function(){"
@@ -382,6 +387,8 @@ def shell_html() -> str:
         "function blSubmit(){var r=document.querySelector("
         "'input[name=bl-opt]:checked');if(!r){pycmd('bl:none');return;}"
         "pycmd('bl:choose:'+r.value);}"
+        # Typeset the embedded initial content once MathJax is ready.
+        "blTypeset();"
         "</script>"
     )
 
@@ -406,11 +413,10 @@ class CalibrationDialog(QDialog):
         self._calib = calib
         self._blai = blai
 
-        col = mw.col
-        # Only LOCAL card selection here (fast DB read) — NO analog generation,
-        # so nothing touches the network before the first paint. The analogs are
-        # produced asynchronously (see _start_generation) while the user rates.
-        self.cards = calib.select_calibration_cards(col) if col else []
+        # Calibration always uses the canonical scraped SOA Exam P question bank
+        # (full question + solution HTML), NOT whatever cards happen to be in the
+        # collection — those may have uninformative fronts (e.g. a topic label).
+        self.cards = calib.seed_calibration_items()
         n = len(self.cards)
         # analogs[i] is None until its background generation lands.
         self.analogs: list[blai.GeneratedAnalog | None] = [None] * n
@@ -425,24 +431,26 @@ class CalibrationDialog(QDialog):
         self._gen_finished = n == 0
         self._waiting_index: int | None = None  # analog the UI is blocked on
         self._wait_timer_armed = False
+        self._loaded = False  # True once the webview page has finished loading
 
-        self._build()
         if not self.cards:
             from aqt.utils import showInfo
 
             showInfo(
-                "No Exam P cards found to calibrate on. Seed the default deck first.",
+                "No bundled Exam P questions are available to calibrate on.",
                 parent=self,
                 title="BrainLift",
             )
             self.reject()
             return
-        # Paint the rate step from local card data immediately (zero network),
-        # then kick analog generation off onto a background thread.
-        self._render()
+        # Build the webview with the first step embedded in the page (no eval →
+        # no blank-window race), then kick analog generation off in the
+        # background while the user rates.
+        self._build()
         self._start_generation()
 
     def _build(self) -> None:
+        from aqt.qt import qconnect
         from aqt.webview import AnkiWebView, AnkiWebViewKind
 
         layout = QVBoxLayout()
@@ -451,17 +459,27 @@ class CalibrationDialog(QDialog):
         self.web.set_bridge_command(self._on_cmd, self)
         layout.addWidget(self.web)
         self.setLayout(layout)
-        self.web.stdHtml(shell_html(), css=_CSS, js=_JS, context=self)
+        qconnect(self.web.loadFinished, self._on_loaded)
+        # Embed the first step directly in the shell so it paints without eval.
+        self.web.stdHtml(shell_html(self._current_body()), css=_CSS, js=_JS, context=self)
+
+    def _on_loaded(self, ok: bool) -> None:
+        self._loaded = True
+        # Re-typeset the embedded initial content now the page (and MathJax) is up.
+        self.web.eval("blTypeset();")
 
     # --- rendering ----------------------------------------------------------
 
     def _card_html(self, index: int) -> tuple[str, str]:
-        cid = self.cards[index][0]
-        if self.mw.col is None:
-            return "", ""
-        return self._calib.render_card_display(self.mw.col, cid)
+        # Front/back are the bundled SOA question/solution HTML (already
+        # Private-Use-glyph stripped); render them directly with MathJax.
+        _id, front, back = self.cards[index]
+        return front, back
 
     def _render(self) -> None:
+        self.web.eval(f"blRender({json.dumps(self._current_body())});")
+
+    def _current_body(self) -> str:
         total = len(self.cards)
         # Only the analog phase can block on AI; clear the wait flag by default
         # and re-set it below if we actually have to wait.
@@ -513,7 +531,7 @@ class CalibrationDialog(QDialog):
                 analog.correct_index,
                 self.chosen_indices[self.index],
             )
-        self.web.eval(f"blRender({json.dumps(body)});")
+        return body
 
     def _gen_status_footer(self) -> str:
         if self._gen_finished:
@@ -577,6 +595,10 @@ class CalibrationDialog(QDialog):
             self._gen_done_count += 1
         if self._gen_done_count >= len(self.cards):
             self._gen_finished = True
+        if not self._loaded:
+            # Page not up yet — the embedded first paint already shows the rate
+            # step; the next full render will reflect current progress.
+            return
         if self._waiting_index is not None:
             # User is on the spinner waiting for this exact analog — full repaint
             # (swaps the spinner for the question once it's the awaited one).

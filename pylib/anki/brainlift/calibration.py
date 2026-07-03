@@ -218,6 +218,39 @@ def render_card_display(col: Collection, card_id: int) -> tuple[str, str]:
 # --- card selection + analog generation -------------------------------------
 
 
+def seed_calibration_items(
+    size: int = CALIBRATION_TEST_SIZE,
+) -> list[tuple[int, str, str]]:
+    """Return ``size`` ``(id, front_html, back_html)`` items from the bundled SOA
+    Exam P question bank, spread across the bank for topic variety.
+
+    Calibration always uses the canonical scraped SOA questions (full question +
+    published solution HTML, Private-Use glyphs stripped) so the test shows real,
+    self-contained, readable questions regardless of what else is in the user's
+    collection (their own imported/synced cards may have uninformative fronts).
+    The ``id`` is the stable seed index, used only for named-source traceability.
+    """
+    from anki.brainlift.examp_seed import SEED_CARDS
+
+    total = len(SEED_CARDS)
+    if total == 0:
+        return []
+    n = min(size, total)
+    step = max(1, total // n)  # evenly spread so we sample multiple topics
+    items: list[tuple[int, str, str]] = []
+    seen: set[int] = set()
+    for k in range(n):
+        idx = min(k * step, total - 1)
+        while idx in seen and idx < total - 1:
+            idx += 1
+        seen.add(idx)
+        card = SEED_CARDS[idx]
+        front = strip_private_use(str(card.get("front", "")))
+        back = strip_private_use(str(card.get("back", "")))
+        items.append((idx, front, back))
+    return items
+
+
 def select_calibration_cards(
     col: Collection, size: int = CALIBRATION_TEST_SIZE
 ) -> list[tuple[int, str, str]]:

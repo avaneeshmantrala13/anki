@@ -332,3 +332,19 @@ def test_build_calibration_questions_uses_parallel_batch(monkeypatch):
     assert len(analogs) == len(cards)
     for (cid, _f, _b), analog in zip(cards, analogs):
         assert analog.source_card_id == cid
+
+
+def test_seed_calibration_items_are_real_questions_not_tag_paths():
+    # Calibration must present the bundled SOA questions (full question HTML),
+    # never a bare topic/tag path like "ExamP::GeneralProbability::...".
+    items = calib.seed_calibration_items()
+    assert len(items) == calib.CALIBRATION_TEST_SIZE
+    ids = [i for i, _, _ in items]
+    assert len(set(ids)) == len(ids)  # spread, no duplicates
+    for _id, front, back in items:
+        assert front.strip()
+        assert not front.strip().startswith("ExamP::")  # not a tag path
+        assert "\ue000" not in front and "\uf8ff" not in front  # PUA stripped
+    # At least one item should read like a real Exam P question.
+    joined = " ".join(front for _, front, _ in items)
+    assert "Calculate" in joined or "probability" in joined
