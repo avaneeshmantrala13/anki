@@ -152,3 +152,35 @@ def test_explanation_bands():
     assert calib.explain_accuracy(0.72)
     assert calib.explain_accuracy(0.6)
     assert "caution" in calib.explain_accuracy(0.4).lower()
+
+
+def test_strip_private_use_removes_pdf_glyphs():
+    # U+F8EE / U+F8F9 etc. are the PUA "big bracket" glyphs from the SOA PDF.
+    dirty = "P\uf8eeH \u2229 Fc\uf8f9 = 0.173"
+    clean = calib.strip_private_use(dirty)
+    assert "\uf8ee" not in clean and "\uf8f9" not in clean
+    # Real content (intersection sign, text, numbers) is preserved.
+    assert "\u2229" in clean and "0.173" in clean
+
+
+def test_render_card_display_returns_real_rendered_html():
+    from anki.brainlift.default_content import maybe_seed_default_deck
+
+    col = getEmptyCol()
+    maybe_seed_default_deck(col)
+    cards = calib.select_calibration_cards(col)
+    assert cards, "expected seeded Exam P cards"
+    cid, front, back = cards[0]
+
+    q_html, a_html = calib.render_card_display(col, cid)
+    # The rendered FRONT carries the real card question, not just a topic path.
+    assert "watched gymnastics" in q_html
+    # The rendered ANSWER carries the back/solution content.
+    assert "Answer" in a_html
+    # No Private Use Area glyphs leak into displayed HTML.
+    assert not any("\ue000" <= ch <= "\uf8ff" for ch in q_html + a_html)
+
+
+def test_render_card_display_bad_id_is_safe():
+    col = getEmptyCol()
+    assert calib.render_card_display(col, 123456789) == ("", "")

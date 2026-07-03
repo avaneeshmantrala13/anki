@@ -19,6 +19,7 @@ Nothing here calls the network directly — analog generation goes through
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING
@@ -176,6 +177,42 @@ class CalibrationResult:
     authority_multiplier: float
     completed_at: int
     explanation: str = ""
+
+
+# --- card rendering for display (reuses Anki's own card templates) -----------
+
+# The bundled SOA solutions were extracted from a PDF whose big-bracket,
+# integral and matrix glyphs land in the Unicode Private Use Area (e.g. U+F8EE).
+# Those code points have no portable font glyph and render as tofu boxes /
+# "gibberish brackets", so we strip them for DISPLAY ONLY (stored data is never
+# mutated). Covers the BMP PUA plus the two supplementary PUA planes.
+_PRIVATE_USE_RE = re.compile(
+    "[\ue000-\uf8ff\U000f0000-\U000ffffd\U00100000-\U0010fffd]"
+)
+
+
+def strip_private_use(text: str) -> str:
+    """Remove Unicode Private Use Area glyphs from text (display-only cleanup)."""
+    return _PRIVATE_USE_RE.sub("", text)
+
+
+def render_card_display(col: Collection, card_id: int) -> tuple[str, str]:
+    """Return ``(question_html, answer_html)`` for a card, rendered like Anki.
+
+    Uses the collection's *own* card rendering (``Card.question()`` /
+    ``Card.answer()``) so templates, fields and cloze resolve exactly as they do
+    in the reviewer, escapes media filenames to their served URLs, and strips
+    Private Use Area glyphs. The calibration webview loads MathJax, so any
+    ``\\(...\\)`` / ``\\[...\\]`` in the rendered HTML becomes real math instead
+    of raw source. Returns ``("", "")`` on any failure so the UI never crashes.
+    """
+    try:
+        card = col.get_card(int(card_id))
+        question = col.media.escape_media_filenames(card.question())
+        answer = col.media.escape_media_filenames(card.answer())
+        return strip_private_use(question), strip_private_use(answer)
+    except Exception:
+        return "", ""
 
 
 # --- card selection + analog generation -------------------------------------
