@@ -59,9 +59,34 @@ CALIBRATION_PRODUCTION_SIZE = 50   # clear path to production size
 ## 3. Feature 1 — Metacognitive calibration ("confidence authority")
 
 ### 3.1 Flow
-1. Pick `CALIBRATION_TEST_SIZE` cards deterministically from the seeded Exam P
-   deck (stable ordering: sort candidate cards by id, take the first N — same on
-   both platforms so a re-run is reproducible).
+1. Pick `CALIBRATION_TEST_SIZE` (=15) cards deterministically from the **shared
+   SOA seed bank** — NOT from whatever cards happen to be in the user's
+   collection. The bank is the 437-card SOA Exam P question set
+   (`pylib/anki/brainlift/examp_seed.py::SEED_CARDS`). Both platforms consume it:
+   desktop imports `SEED_CARDS` directly; Android ships it as a bundled JSON
+   asset (`AnkiDroid/src/main/assets/brainlift/examp_seed.json`) that is
+   **generated from `examp_seed.py`** (never hand-copied — regenerate with the
+   snippet in `BrainLiftCalibration.SEED_BANK_ASSET`'s doc / the throwaway dump
+   `python -c "import json;from anki.brainlift.examp_seed import SEED_CARDS;..."`).
+   Selection is the identical **even-spread** algorithm on both platforms so the
+   same 15 questions are chosen in the same order (this is parity-critical — the
+   deterministic AI-off analog generator is seeded off the source index, so the
+   same selection ⇒ the same analogs):
+   ```
+   total = len(SEED_CARDS)                 # 437
+   n     = min(size, total)                # 15
+   step  = max(1, total // n)              # 29
+   for k in range(n):                      # idx = 0, 29, 58, ..., 406
+       idx = min(k * step, total - 1)
+       while idx in seen: idx += 1         # skip already-picked (no dupes)
+       id = idx                            # the SEED INDEX is the source id
+   ```
+   Front/back are the SOA question/solution HTML with Unicode Private-Use-Area
+   glyphs stripped for display (ranges
+   `[\ue000-\uf8ff\U000f0000-\U000ffffd\U00100000-\U0010fffd]`).
+   Implemented by `calibration.seed_calibration_items` (desktop) and
+   `BrainLiftCalibration.seedCalibrationItems` (Android); asserted equal in
+   `test_brainlift_calibration.py` and `BrainLiftParityTest.kt`.
 2. For each card the user picks a **confidence label** (§1) *before* seeing the
    answer → `confidence_value ∈ [0,1]`.
 3. For each card, generate **one analog MCQ** (reworded / re-parameterized) via
