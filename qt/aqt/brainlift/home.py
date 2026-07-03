@@ -489,10 +489,11 @@ class BrainLiftLanding:
         return None
 
     def _open_calibration(self) -> None:
-        from aqt.brainlift.calibration_dialog import CalibrationDialog
+        # Delegate to the single canonical launcher, which defers the dialog off
+        # this pycmd bridge callback. Refresh the landing after the dialog closes.
+        from aqt.brainlift import open_calibration
 
-        CalibrationDialog(self.mw).exec()
-        self.render()
+        open_calibration(self.mw, on_close=self.render)
 
     def _reset_calibration(self) -> None:
         from aqt.utils import tooltip

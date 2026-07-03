@@ -35,12 +35,26 @@ def open_home(mw: AnkiQt) -> None:
     mw.moveToState(STATE)
 
 
-def open_calibration(mw: AnkiQt) -> None:
+def open_calibration(mw: AnkiQt, on_close=None) -> None:
+    """Canonical calibration launcher used by BOTH the Tools menu and the home
+    button. The dialog is deferred onto the next event-loop tick via
+    ``mw.progress.single_shot(0, ...)`` so it never runs nested inside a
+    QtWebEngine ``pycmd`` bridge callback — creating a modal dialog and spinning
+    a nested event loop (``.exec()``) from inside that callback is a known
+    failure mode that leaves the dialog blank/non-functional.
+    """
     if mw.col is None:
         return
-    from aqt.brainlift.calibration_dialog import CalibrationDialog
 
-    CalibrationDialog(mw).exec()
+    def _run() -> None:
+        from aqt.brainlift.calibration_dialog import CalibrationDialog
+
+        dlg = CalibrationDialog(mw)
+        dlg.exec()
+        if on_close is not None:
+            on_close()
+
+    mw.progress.single_shot(0, _run, False)
 
 
 def open_ai_settings(mw: AnkiQt) -> None:
