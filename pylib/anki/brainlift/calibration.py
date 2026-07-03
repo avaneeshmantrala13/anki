@@ -304,6 +304,18 @@ def has_calibration(col: Collection) -> bool:
     return load_calibration(col) is not None
 
 
+def clear_calibration(col: Collection) -> None:
+    """Wipe any stored calibration so the test can be cleanly re-run.
+
+    Removes both the full result and the flat scheduling multiplier, resetting
+    scheduling authority to neutral (1.0 via :func:`calibration_multiplier`).
+    Re-running the test simply overwrites these keys, so an explicit reset is
+    optional — it exists mainly so testers can start from a known-empty state.
+    """
+    col.remove_config(CONFIG_KEY)
+    col.remove_config(CONFIG_MULTIPLIER_KEY)
+
+
 def calibration_multiplier(col: Collection) -> float:
     """The synced authority multiplier used by the scheduling layer (default 1)."""
     return float(col.get_config(CONFIG_MULTIPLIER_KEY, 1.0))

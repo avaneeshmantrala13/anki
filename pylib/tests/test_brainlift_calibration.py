@@ -103,6 +103,25 @@ def test_score_and_persist_roundtrip():
         assert it.generated_source_text
 
 
+def test_clear_calibration_makes_it_rerunnable():
+    col = getEmptyCol()
+    cards = [(1, "front1", "back1"), (2, "front2", "back2")]
+    client = blai.DeterministicAnalogClient()
+    analogs = [client.generate_analog(f, b, cid) for cid, f, b in cards]
+    labels = ["Highly confident", "Guessing"]
+    chosen = [analogs[0].correct_index, analogs[1].correct_index]
+    calib.run_calibration(col, cards, analogs, labels, chosen)
+    assert calib.has_calibration(col) is True
+    # Reset wipes the stored result and resets scheduling authority to neutral.
+    calib.clear_calibration(col)
+    assert calib.has_calibration(col) is False
+    assert calib.load_calibration(col) is None
+    assert calib.calibration_multiplier(col) == 1.0
+    # Re-running after a reset persists a fresh result cleanly.
+    calib.run_calibration(col, cards, analogs, labels, chosen)
+    assert calib.has_calibration(col) is True
+
+
 def test_ai_off_uses_deterministic_client_and_still_scores():
     col = getEmptyCol()
     # AI disabled by default; client must be the deterministic one.

@@ -134,6 +134,33 @@ LANDING_CSS = """
   .quick .qbtn:hover .ico { color:var(--bl-primary); }
 
   .dash-wrap { background:transparent; margin-top:6px; }
+
+  /* Feature 1 calibration launcher — deliberately prominent. */
+  .cal-card { background:var(--bl-surface); border:1px solid var(--bl-border);
+              border-left:4px solid var(--bl-primary); border-radius:12px;
+              padding:18px 20px; box-shadow:var(--bl-shadow-card);
+              display:flex; gap:20px; align-items:center;
+              justify-content:space-between; flex-wrap:wrap; }
+  .cal-head { flex:1; min-width:280px; }
+  .cal-title { font-weight:700; font-size:16px; letter-spacing:-.01em;
+               margin-bottom:4px; }
+  .cal-desc { font-size:13px; line-height:1.5; color:var(--bl-text-2);
+              margin-bottom:8px; }
+  .cal-status { font-size:13px; color:var(--bl-text); margin-bottom:6px; }
+  .cal-ai { font-size:11.5px; color:var(--bl-text-3); line-height:1.45; }
+  .cal-actions { display:flex; flex-direction:column; gap:8px;
+                 align-items:stretch; min-width:200px; }
+  .cal-start { background:var(--bl-primary); color:#fff; border:none;
+               border-radius:10px; padding:12px 20px; font-size:14px;
+               font-weight:700; cursor:pointer; white-space:nowrap; }
+  .cal-start:hover { background:var(--bl-primary-hover); }
+  .cal-start:active { background:var(--bl-primary-active); }
+  .cal-reset { background:var(--bl-surface-2); color:var(--bl-text-2);
+               border:1px solid var(--bl-border); border-radius:10px;
+               padding:9px 16px; font-size:13px; font-weight:600;
+               cursor:pointer; }
+  .cal-reset:hover { background:var(--bl-primary-tint); color:var(--bl-primary); }
+
   @media (max-width:760px){ .steps{ grid-template-columns:1fr 1fr; } }
 """
 
@@ -179,15 +206,92 @@ class BrainLiftLanding:
         guided = self._guided_html(
             onboarded, has_diag, diag_required, studied, has_cards, ready
         )
+        calibration = self._calibration_html(col)
         body = (
             f"<style>{dashboard.DASHBOARD_CSS}{LANDING_CSS}</style>"
             "<div class='bl-root'><div class='bl-wrap'>"
             f"{guided}"
+            f"{calibration}"
             "<div class='section-label'>Your dashboard</div>"
             f"<div class='dash-wrap'>{dashboard.render_body(d, heading='')}</div>"
             "</div></div>"
         )
         self.web.stdHtml(body, context=self)
+
+    def _calibration_html(self, col) -> str:
+        """Feature 1 entry: a prominent, always-visible, re-runnable launcher.
+
+        Renders a dedicated card with a big "Start Calibration Test (15)" button
+        (wired through the existing pycmd bridge). If a prior run exists it shows
+        the last score plus a "Reset & re-run" affordance — but the test is
+        re-runnable regardless, since running it simply overwrites the stored
+        result. Also surfaces whether real OpenAI or the deterministic fallback
+        will be used, so testing is never silently gated by the AI toggle.
+        """
+        from anki.brainlift import ai as blai
+        from anki.brainlift import calibration as calib
+
+        size = calib.CALIBRATION_TEST_SIZE
+        prior = calib.load_calibration(col)
+
+        ai_on = blai.ai_enabled(col)
+        key_present = blai.api_key_from_env() is not None
+        real_ai = ai_on and key_present
+        if real_ai:
+            ai_line = (
+                "Real OpenAI analog generation is ON "
+                f"(model {html.escape(blai.ai_model(col))}, OPENAI_API_KEY detected)."
+            )
+        elif ai_on and not key_present:
+            ai_line = (
+                "AI is enabled but no OPENAI_API_KEY was detected — questions use "
+                "the deterministic fallback generator."
+            )
+        else:
+            ai_line = (
+                "AI is off — questions use the deterministic fallback generator. "
+                "Enable it under Tools ▸ BrainLift: AI settings (and set "
+                "OPENAI_API_KEY) to use real OpenAI."
+            )
+
+        if prior is not None:
+            status = (
+                "<div class='cal-status'>Last run: "
+                f"<b>{prior.accuracy:.0%}</b> calibration accuracy "
+                f"· {html.escape(prior.explanation)}</div>"
+            )
+            primary_label = f"Re-run Calibration Test ({size})"
+            reset_btn = (
+                "<button class='btn secondary cal-reset' "
+                "onclick=\"pycmd('bl:calibrate:reset')\">Reset result</button>"
+            )
+        else:
+            status = (
+                "<div class='cal-status'>Not run yet — rate "
+                f"{size} cards, answer {size} analog questions, then see your "
+                "calibration accuracy score.</div>"
+            )
+            primary_label = f"Start Calibration Test ({size})"
+            reset_btn = ""
+
+        return (
+            "<div class='section-label'>Confidence calibration · Feature 1</div>"
+            "<div class='cal-card'>"
+            "<div class='cal-head'>"
+            "<div class='cal-title'>Calibration test</div>"
+            f"<div class='cal-desc'>Rate your confidence on {size} Exam P cards, "
+            f"answer {size} AI-generated analog questions, and get an accuracy "
+            "score for how well you know what you know.</div>"
+            f"{status}"
+            f"<div class='cal-ai'>{ai_line}</div>"
+            "</div>"
+            "<div class='cal-actions'>"
+            f"<button class='btn cal-start' onclick=\"pycmd('bl:calibrate')\">"
+            f"{html.escape(primary_label)}</button>"
+            f"{reset_btn}"
+            "</div>"
+            "</div>"
+        )
 
     # --- HTML ---------------------------------------------------------------
 
@@ -305,8 +409,6 @@ class BrainLiftLanding:
             "<span class='ico'>▤</span> Browse</button>"
             "<button class='qbtn' onclick=\"pycmd('bl:stats')\">"
             "<span class='ico'>▦</span> Stats</button>"
-            "<button class='qbtn' onclick=\"pycmd('bl:calibrate')\">"
-            "<span class='ico'>◎</span> Confidence calibration</button>"
             "<button class='qbtn' onclick=\"pycmd('bl:sync')\">"
             "<span class='ico'>⟳</span> Sync</button>"
             "</div>"
@@ -380,6 +482,8 @@ class BrainLiftLanding:
             self.mw.onSync()
         elif cmd == "bl:calibrate":
             self._open_calibration()
+        elif cmd == "bl:calibrate:reset":
+            self._reset_calibration()
         elif cmd == "bl:refresh":
             self.render()
         return None
@@ -388,6 +492,16 @@ class BrainLiftLanding:
         from aqt.brainlift.calibration_dialog import CalibrationDialog
 
         CalibrationDialog(self.mw).exec()
+        self.render()
+
+    def _reset_calibration(self) -> None:
+        from aqt.utils import tooltip
+
+        if self.mw.col is not None:
+            from anki.brainlift import calibration as calib
+
+            calib.clear_calibration(self.mw.col)
+            tooltip("Calibration result cleared — run the test again.", parent=self.mw)
         self.render()
 
     def _open_onboarding(self) -> None:
