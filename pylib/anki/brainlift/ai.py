@@ -31,7 +31,9 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -480,3 +482,69 @@ def get_client(
 
 def client_for_collection(col: Collection) -> AiClient:
     return get_client(ai_enabled(col), ai_model(col), api_key_from_env())
+
+
+# --- parallel batch generation ----------------------------------------------
+# The desktop calibration dialog needs ONE analog per selected card. Generating
+# them one-at-a-time with the real client meant N sequential ~1.5-3s HTTPS round
+# trips (≈20-45s for 15 cards) — and, worse, it used to run BEFORE the UI was
+# painted, so the window looked frozen/blank the whole time. This helper fans
+# the (blocking, network) calls out across a small thread pool so N cards take
+# roughly one round-trip instead of N, and reports each result as it lands so a
+# UI can show live progress. The caller runs it OFF the Qt main thread.
+
+# Default worker cap. Small enough to stay well under OpenAI rate limits while
+# collapsing 15 sequential calls into ~2 waves.
+BATCH_MAX_WORKERS = 8
+
+
+def generate_analogs_batch(
+    client: AiClient,
+    items: list[tuple[str, str, int]],
+    max_workers: int = BATCH_MAX_WORKERS,
+    on_result: Callable[[int, GeneratedAnalog], None] | None = None,
+) -> list[GeneratedAnalog]:
+    """Generate one analog per ``(front, back, source_card_id)`` in ``items``.
+
+    Returns a list of :class:`GeneratedAnalog` in the **same order** as
+    ``items`` (so it lines up with the selected cards). Calls run concurrently
+    on a thread pool — for the real OpenAI client this overlaps the network
+    latency; for the deterministic client it's instant. Each generation already
+    degrades to a deterministic fallback internally and never raises, but we
+    still wrap it defensively so one bad item can't sink the batch.
+
+    ``on_result(index, analog)`` — if given — is invoked as each item
+    completes (from the calling thread's ``as_completed`` loop, i.e. the
+    background worker, NOT necessarily the item's own pool thread), so a UI can
+    update a "generating X of N" indicator. Marshal to the UI thread yourself.
+    """
+    n = len(items)
+    results: list[GeneratedAnalog | None] = [None] * n
+    if n == 0:
+        return []
+
+    _fallback = DeterministicAnalogClient()
+
+    def _one(i: int) -> tuple[int, GeneratedAnalog]:
+        front, back, cid = items[i]
+        try:
+            analog = client.generate_analog(front, back, cid)
+        except Exception:
+            # Client contract is "never raise", but stay safe: clean fallback.
+            analog = _fallback.generate_analog(front, back, cid)
+            analog.ok = False
+        return i, analog
+
+    workers = max(1, min(max_workers, n))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_one, i) for i in range(n)]
+        for fut in as_completed(futures):
+            i, analog = fut.result()
+            results[i] = analog
+            if on_result is not None:
+                try:
+                    on_result(i, analog)
+                except Exception:
+                    pass
+
+    return [r for r in results if r is not None]

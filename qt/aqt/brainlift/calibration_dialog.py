@@ -163,6 +163,28 @@ html.night-mode .cal-btn { color: #14161d; }
 .cal-score-big { font-size: 40px; font-weight: 800; color: var(--cal-accent); margin: 6px 0; }
 .cal-score-row { font-size: 14px; color: var(--cal-text); margin: 4px 0; line-height: 1.5; }
 .cal-score-note { font-size: 12.5px; color: var(--cal-muted); margin: 12px 0 18px; line-height: 1.5; }
+/* generating / loading state (shown whenever we're waiting on AI) */
+.cal-gen { display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; padding: 40px 20px 34px; gap: 16px; }
+.cal-spinner {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 4px solid var(--cal-opt-border);
+  border-top-color: var(--cal-accent);
+  animation: cal-spin 0.8s linear infinite;
+}
+@keyframes cal-spin { to { transform: rotate(360deg); } }
+.cal-gen-text { font-size: 15px; font-weight: 600; color: var(--cal-strong); }
+.cal-gen-sub { font-size: 13px; color: var(--cal-muted); line-height: 1.5; max-width: 420px; }
+.cal-gen-bar { width: 280px; height: 6px; border-radius: 6px;
+  background: var(--cal-opt-border); overflow: hidden; }
+.cal-gen-bar > span { display: block; height: 100%; background: var(--cal-accent);
+  border-radius: 6px; transition: width .25s ease; }
+/* subtle background-generation status shown under the rate/reveal steps */
+.cal-genstatus { display: flex; align-items: center; gap: 8px; margin: 18px 0 0;
+  font-size: 12px; font-weight: 600; color: var(--cal-muted); }
+.cal-genstatus .dot { width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid var(--cal-opt-border); border-top-color: var(--cal-accent);
+  animation: cal-spin 0.8s linear infinite; flex: none; }
 """
 
 
@@ -234,6 +256,37 @@ def build_answer_step_html(
         + _options_html(choices)
         + "<button class='cal-btn' onclick='blSubmit()'>Submit answer</button>"
         + "</div>"
+    )
+
+
+def build_generating_html(progress: str, done: int, total: int) -> str:
+    """Full-screen loading state: shown if the user reaches the analog phase
+    before its question has finished generating. Never a blank window — a
+    spinner + "generating X of N" so the wait is always visible/explained."""
+    pct = int(round(done / total * 100)) if total else 0
+    return (
+        "<div class='cal-wrap'>"
+        + _progress(progress)
+        + "<div class='cal-gen'>"
+        + "<div class='cal-spinner'></div>"
+        + "<div class='cal-gen-text'>Preparing your analog question…</div>"
+        + f"<div class='cal-gen-bar'><span style='width:{pct}%'></span></div>"
+        + f"<div class='cal-gen-sub'>{done} of {total} questions ready. These are "
+        "written by AI from the cards you just rated — this only takes a moment.</div>"
+        + "</div>"
+        + "</div>"
+    )
+
+
+def build_gen_status_footer(done: int, total: int) -> str:
+    """A small, unobtrusive 'still generating' line appended under the rate/
+    reveal steps so background AI progress is always visible (never silent)."""
+    if total <= 0 or done >= total:
+        return ""
+    return (
+        "<div class='cal-genstatus'><span class='dot'></span>"
+        f"Preparing analog questions in the background… {done} of {total} ready"
+        "</div>"
     )
 
 
@@ -333,6 +386,13 @@ def shell_html() -> str:
     )
 
 
+# Safety net: if the real client is somehow still not done this long after the
+# user reaches an analog they're waiting on, fill that slot deterministically so
+# the UI can never hang forever (each real call also has its own 30s request
+# timeout + fallback, so this is a belt-and-braces guard).
+_WAIT_FALLBACK_MS = 40_000
+
+
 class CalibrationDialog(QDialog):
     def __init__(self, mw: AnkiQt, parent=None) -> None:
         super().__init__(parent or mw)
@@ -347,16 +407,24 @@ class CalibrationDialog(QDialog):
         self._blai = blai
 
         col = mw.col
+        # Only LOCAL card selection here (fast DB read) — NO analog generation,
+        # so nothing touches the network before the first paint. The analogs are
+        # produced asynchronously (see _start_generation) while the user rates.
         self.cards = calib.select_calibration_cards(col) if col else []
-        self.analogs = calib.build_calibration_questions(col) if col else []
-        n = min(len(self.cards), len(self.analogs))
-        self.cards = self.cards[:n]
-        self.analogs = self.analogs[:n]
+        n = len(self.cards)
+        # analogs[i] is None until its background generation lands.
+        self.analogs: list[blai.GeneratedAnalog | None] = [None] * n
 
         self.confidence_labels: list[str] = []
         self.chosen_indices: list[int] = []
         self.index = 0
         self.phase = "rate"  # rate -> reveal -> ... -> answer -> answer_reveal
+
+        # generation bookkeeping
+        self._gen_done_count = 0
+        self._gen_finished = n == 0
+        self._waiting_index: int | None = None  # analog the UI is blocked on
+        self._wait_timer_armed = False
 
         self._build()
         if not self.cards:
@@ -369,7 +437,10 @@ class CalibrationDialog(QDialog):
             )
             self.reject()
             return
+        # Paint the rate step from local card data immediately (zero network),
+        # then kick analog generation off onto a background thread.
         self._render()
+        self._start_generation()
 
     def _build(self) -> None:
         from aqt.webview import AnkiWebView, AnkiWebViewKind
@@ -392,6 +463,9 @@ class CalibrationDialog(QDialog):
 
     def _render(self) -> None:
         total = len(self.cards)
+        # Only the analog phase can block on AI; clear the wait flag by default
+        # and re-set it below if we actually have to wait.
+        self._waiting_index = None
         if self.phase == "rate":
             q_html, _ = self._card_html(self.index)
             if not q_html:
@@ -402,6 +476,7 @@ class CalibrationDialog(QDialog):
                 q_html,
                 self._calib.CONFIDENCE_ORDER,
             )
+            body += f"<div id='bl-genstatus'>{self._gen_status_footer()}</div>"
         elif self.phase == "reveal":
             _, a_html = self._card_html(self.index)
             if not a_html:
@@ -410,14 +485,26 @@ class CalibrationDialog(QDialog):
                 f"Step 1 of 2 · Answer revealed — card {self.index + 1} of {total}",
                 a_html,
             )
+            body += f"<div id='bl-genstatus'>{self._gen_status_footer()}</div>"
         elif self.phase == "answer":
             analog = self.analogs[self.index]
-            body = build_answer_step_html(
-                f"Step 2 of 2 · Answer the analog — question {self.index + 1} of {total}",
-                analog.question,
-                [str(c) for c in analog.choices],
-            )
-        else:  # answer_reveal
+            if analog is None:
+                # Reached the analog before it's ready — show a visible spinner
+                # (never a blank/frozen window) and wait for it to arrive.
+                self._waiting_index = self.index
+                self._arm_wait_timeout()
+                body = build_generating_html(
+                    f"Step 2 of 2 · Answer the analog — question {self.index + 1} of {total}",
+                    self._gen_done_count,
+                    total,
+                )
+            else:
+                body = build_answer_step_html(
+                    f"Step 2 of 2 · Answer the analog — question {self.index + 1} of {total}",
+                    analog.question,
+                    [str(c) for c in analog.choices],
+                )
+        else:  # answer_reveal (analog is guaranteed ready — it was just answered)
             analog = self.analogs[self.index]
             body = build_answer_reveal_html(
                 f"Step 2 of 2 · Solution — question {self.index + 1} of {total}",
@@ -427,6 +514,107 @@ class CalibrationDialog(QDialog):
                 self.chosen_indices[self.index],
             )
         self.web.eval(f"blRender({json.dumps(body)});")
+
+    def _gen_status_footer(self) -> str:
+        if self._gen_finished:
+            return ""
+        return build_gen_status_footer(self._gen_done_count, len(self.cards))
+
+    # --- async analog generation -------------------------------------------
+
+    def _start_generation(self) -> None:
+        """Generate all analogs OFF the UI thread while the user rates cards.
+
+        Nothing here runs on the Qt main thread except reading the AI config and
+        the already-selected card text; the (blocking, network) OpenAI calls are
+        fanned out across a thread pool inside ``generate_analogs_batch`` on a
+        background worker, and each result is marshalled back to the UI thread.
+        """
+        col = self.mw.col
+        if col is None or not self.cards:
+            self._gen_finished = True
+            return
+
+        # Resolve the client (reads collection config) on the main thread.
+        client = self._blai.client_for_collection(col)
+        items = [(front, back, cid) for cid, front, back in self.cards]
+
+        # The deterministic client is instant and does no network — fill inline
+        # so there's no threading at all when AI is off / no key is present.
+        if isinstance(client, self._blai.DeterministicAnalogClient):
+            self.analogs = list(self._blai.generate_analogs_batch(client, items))
+            self._gen_done_count = len(self.analogs)
+            self._gen_finished = True
+            return
+
+        def task() -> None:
+            def on_result(i: int, analog) -> None:
+                # Runs on the background worker → hop to the UI thread.
+                self.mw.taskman.run_on_main(
+                    lambda i=i, analog=analog: self._on_analog_ready(i, analog)
+                )
+
+            self._blai.generate_analogs_batch(client, items, on_result=on_result)
+
+        def on_done(fut) -> None:
+            try:
+                fut.result()
+            except Exception:
+                pass
+            # Backfill anything still missing (shouldn't happen — each call falls
+            # back internally — but never leave a hole) and mark finished.
+            self._backfill_missing()
+            self._gen_finished = True
+            if self._waiting_index is not None:
+                self._render()
+
+        self.mw.taskman.run_in_background(task, on_done, uses_collection=False)
+
+    def _on_analog_ready(self, index: int, analog) -> None:
+        """Cache a freshly generated analog (UI thread) and refresh progress."""
+        if 0 <= index < len(self.analogs) and self.analogs[index] is None:
+            self.analogs[index] = analog
+            self._gen_done_count += 1
+        if self._gen_done_count >= len(self.cards):
+            self._gen_finished = True
+        if self._waiting_index is not None:
+            # User is on the spinner waiting for this exact analog — full repaint
+            # (swaps the spinner for the question once it's the awaited one).
+            self._render()
+        elif self.phase in ("rate", "reveal"):
+            # User is busy rating — just refresh the small background-progress
+            # footer in place (no card re-render / no MathJax reflow / no flicker).
+            self.web.eval(
+                "var e=document.getElementById('bl-genstatus');"
+                f"if(e){{e.innerHTML={json.dumps(self._gen_status_footer())};}}"
+            )
+
+    def _backfill_missing(self) -> None:
+        """Deterministic fallback for any slot that never produced an analog."""
+        det = self._blai.DeterministicAnalogClient()
+        for i, (cid, front, back) in enumerate(self.cards):
+            if self.analogs[i] is None:
+                self.analogs[i] = det.generate_analog(front, back, cid)
+                self._gen_done_count += 1
+
+    def _arm_wait_timeout(self) -> None:
+        """Guarantee the spinner can't spin forever: after a grace period, fall
+        back to a deterministic analog for whatever we're still waiting on."""
+        if self._wait_timer_armed:
+            return
+        self._wait_timer_armed = True
+        self.mw.progress.single_shot(_WAIT_FALLBACK_MS, self._on_wait_timeout, False)
+
+    def _on_wait_timeout(self) -> None:
+        self._wait_timer_armed = False
+        idx = self._waiting_index
+        if idx is None or self.analogs[idx] is not None:
+            return
+        cid, front, back = self.cards[idx]
+        self.analogs[idx] = self._blai.DeterministicAnalogClient().generate_analog(
+            front, back, cid
+        )
+        self._render()
 
     # --- bridge -------------------------------------------------------------
 
@@ -482,6 +670,9 @@ class CalibrationDialog(QDialog):
         if col is None:
             self.reject()
             return
+        # Defensive: every analog was necessarily ready to be answered, but make
+        # sure no None slot can reach scoring.
+        self._backfill_missing()
         result = self._calib.run_calibration(
             col, self.cards, self.analogs, self.confidence_labels, self.chosen_indices
         )

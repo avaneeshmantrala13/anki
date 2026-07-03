@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from anki.brainlift import ai as blai
@@ -249,14 +249,26 @@ def select_calibration_cards(
 
 
 def build_calibration_questions(
-    col: Collection, size: int = CALIBRATION_TEST_SIZE
+    col: Collection,
+    size: int = CALIBRATION_TEST_SIZE,
+    on_result=None,
 ) -> list[blai.GeneratedAnalog]:
-    """Generate one analog per selected card (named-source recorded)."""
+    """Generate one analog per selected card (named-source recorded).
+
+    Generation is fanned out across a thread pool (see
+    :func:`anki.brainlift.ai.generate_analogs_batch`) so the real OpenAI client
+    overlaps its network round-trips instead of doing ``size`` sequential
+    blocking calls. Order matches :func:`select_calibration_cards`. ``on_result``
+    (if given) fires per completed item for live progress reporting.
+
+    NOTE: This does DB reads (card selection) and, with the real client,
+    blocking network calls — callers on the Qt UI thread must run it off-thread
+    (the desktop dialog dispatches it via ``mw.taskman``).
+    """
+    cards = select_calibration_cards(col, size)
     client = blai.client_for_collection(col)
-    analogs: list[blai.GeneratedAnalog] = []
-    for cid, front, back in select_calibration_cards(col, size):
-        analogs.append(client.generate_analog(front, back, cid))
-    return analogs
+    items = [(front, back, cid) for cid, front, back in cards]
+    return blai.generate_analogs_batch(client, items, on_result=on_result)
 
 
 # --- scoring an answered test ------------------------------------------------

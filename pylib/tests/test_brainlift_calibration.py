@@ -4,6 +4,8 @@
 """Feature 1 (metacognitive calibration) unit tests + AI-off fallback."""
 
 import math
+import threading
+import time
 
 from anki.brainlift import ai as blai
 from anki.brainlift import calibration as calib
@@ -184,3 +186,149 @@ def test_render_card_display_returns_real_rendered_html():
 def test_render_card_display_bad_id_is_safe():
     col = getEmptyCol()
     assert calib.render_card_display(col, 123456789) == ("", "")
+
+
+# --- async / parallel analog generation (the blank-window perf fix) ---------
+
+
+class _SleepyClient:
+    """Test client that simulates slow, blocking network calls so we can prove
+    generation is parallel and correctly ordered, and record thread usage."""
+
+    model = "sleepy-test-model"
+
+    def __init__(self, delay: float = 0.15):
+        self.delay = delay
+        self.threads: set[int] = set()
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def generate_analog(self, front, back, source_card_id, attempt=0):
+        # Later cards sleep less, so completion order != input order — this
+        # lets us assert the batch re-orders results back to input order.
+        time.sleep(self.delay / (1 + (source_card_id % 5)))
+        with self._lock:
+            self.calls += 1
+            self.threads.add(threading.get_ident())
+        return blai.GeneratedAnalog(
+            question=f"q for {source_card_id}",
+            choices=["a", "b", "c"],
+            correct_index=source_card_id % 3,
+            source_card_id=source_card_id,
+            source_text=f"{front} :: {back}",
+            model=self.model,
+            ok=True,
+        )
+
+
+def test_generate_analogs_batch_preserves_input_order():
+    client = _SleepyClient(delay=0.05)
+    items = [(f"front{i}", f"back{i}", 100 + i) for i in range(15)]
+    results = blai.generate_analogs_batch(client, items, max_workers=8)
+    assert len(results) == 15
+    # Result i corresponds to items[i] regardless of completion order.
+    for i, (front, back, cid) in enumerate(items):
+        assert results[i].source_card_id == cid
+        assert results[i].question == f"q for {cid}"
+    assert client.calls == 15
+
+
+def test_generate_analogs_batch_runs_in_parallel():
+    # 15 sequential 0.1s calls would take >=1.5s; parallel across 8 workers is
+    # ~2 waves (~0.2s). Assert clearly faster than sequential to prove overlap.
+    client = _SleepyClient(delay=0.1)
+    items = [("f", "b", 200 + i) for i in range(15)]
+    start = time.time()
+    results = blai.generate_analogs_batch(client, items, max_workers=8)
+    elapsed = time.time() - start
+    assert len(results) == 15
+    assert elapsed < 1.0, f"batch not parallel (took {elapsed:.2f}s)"
+    # Work actually happened on multiple worker threads.
+    assert len(client.threads) > 1
+
+
+def test_generate_analogs_batch_reports_progress_per_item():
+    client = _SleepyClient(delay=0.02)
+    items = [("f", "b", 300 + i) for i in range(6)]
+    seen: list[int] = []
+    lock = threading.Lock()
+
+    def on_result(index, analog):
+        with lock:
+            seen.append(index)
+
+    results = blai.generate_analogs_batch(
+        client, items, max_workers=4, on_result=on_result
+    )
+    assert len(results) == 6
+    # on_result fired exactly once per item (order of arrival may vary).
+    assert sorted(seen) == list(range(6))
+
+
+class _ExplodingClient:
+    model = "boom"
+
+    def generate_analog(self, front, back, source_card_id, attempt=0):
+        raise RuntimeError("network down")
+
+
+def test_generate_analogs_batch_falls_back_when_client_raises():
+    # A misbehaving client that RAISES must never sink the batch: every slot
+    # still gets a valid, checkable deterministic analog (ok=False).
+    client = _ExplodingClient()
+    q = "A fair coin is flipped 3 times. How many outcomes?"
+    items = [(q, "8", i) for i in range(4)]
+    results = blai.generate_analogs_batch(client, items, max_workers=4)
+    assert len(results) == 4
+    for r in results:
+        assert r.ok is False
+        assert len(r.choices) >= 2
+        assert 0 <= r.correct_index < len(r.choices)
+
+
+def test_rate_step_data_requires_no_ai_client(monkeypatch):
+    """First paint (the rate step) is built purely from local card renders, so
+    it must NOT construct or call any AI client. Prove it by making every client
+    factory blow up, then verifying card selection + render still succeed."""
+    from anki.brainlift.default_content import maybe_seed_default_deck
+
+    col = getEmptyCol()
+    maybe_seed_default_deck(col)
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("first paint must not touch the AI client")
+
+    monkeypatch.setattr(blai, "client_for_collection", _forbidden)
+    monkeypatch.setattr(blai, "get_client", _forbidden)
+    monkeypatch.setattr(blai, "RealOpenAIClient", _forbidden)
+
+    # This is exactly the data the rate step renders from — no client involved.
+    cards = calib.select_calibration_cards(col)
+    assert cards, "expected seeded Exam P cards"
+    cid, front, back = cards[0]
+    q_html, a_html = calib.render_card_display(col, cid)
+    assert q_html and a_html
+
+
+def test_build_calibration_questions_uses_parallel_batch(monkeypatch):
+    # build_calibration_questions must delegate to the parallel batch helper
+    # (not a hidden sequential loop), preserving order + named-source linkage.
+    from anki.brainlift.default_content import maybe_seed_default_deck
+
+    col = getEmptyCol()
+    maybe_seed_default_deck(col)
+    cards = calib.select_calibration_cards(col)
+
+    called = {}
+    orig = blai.generate_analogs_batch
+
+    def spy(client, items, *args, **kwargs):
+        called["items"] = items
+        return orig(client, items, *args, **kwargs)
+
+    monkeypatch.setattr(blai, "generate_analogs_batch", spy)
+    analogs = calib.build_calibration_questions(col)
+    assert "items" in called, "build_calibration_questions should use the batch helper"
+    assert len(analogs) == len(cards)
+    for (cid, _f, _b), analog in zip(cards, analogs):
+        assert analog.source_card_id == cid
