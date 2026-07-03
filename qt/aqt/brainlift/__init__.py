@@ -174,14 +174,27 @@ def _seed_and_land(mw: AnkiQt) -> None:
     """Seed default content (once, only if empty) then show the landing."""
     if mw.col is not None:
         try:
-            from anki.brainlift.default_content import maybe_seed_default_deck
+            from anki.brainlift.default_content import (
+                maybe_seed_default_deck,
+                repair_garbled_seed,
+            )
 
             added = maybe_seed_default_deck(mw.col)
-            if added:
-                # Reset so the freshly-seeded cards are visible everywhere.
+            # Heal any stale/garbled seed cards from an older (pypdf) build so
+            # reviews show readable math; the fix syncs to the phone.
+            repaired, removed = repair_garbled_seed(mw.col)
+            if added or repaired or removed:
+                # Reset so the freshly-seeded/repaired cards are visible everywhere.
                 mw.col.reset()
+            if repaired or removed:
+                from aqt.utils import tooltip
+
+                msg = f"BrainLift fixed {repaired} Exam P question cards"
+                if removed:
+                    msg += f" and removed {removed} unreadable ones"
+                tooltip(msg + ". Sync to update your phone.", parent=mw)
         except Exception:
-            # Never let seeding block the user from reaching the landing.
+            # Never let seeding/repair block the user from reaching the landing.
             pass
     open_home(mw)
 

@@ -17,6 +17,7 @@ coverage/dashboard logic reads. It is:
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,9 +25,16 @@ if TYPE_CHECKING:
 
 # Config flag recording that we've already seeded (syncs across devices).
 CONFIG_KEY = "brainlift_seeded_default"
+# Config flag recording that we've repaired stale/garbled seed content once.
+REPAIR_FLAG = "brainlift_seed_repaired_v1"
 
 DECK_NAME = "Exam P — Sample Questions"
 BASIC_NOTETYPE = "Basic"
+
+# Parses the SOA source question number out of a card's attribution line, e.g.
+# "...Sample Questions/Solutions, Q3. https://..." -> 3. Present on both the
+# clean bundled cards and the older garbled ones, so it's a stable join key.
+_QNUM_RE = re.compile(r"Sample Questions/Solutions,\s*Q(\d+)\b")
 
 
 def _has_any_cards(col: Collection) -> bool:
@@ -90,3 +98,76 @@ def maybe_seed_default_deck(col: Collection) -> int:
     except Exception:
         # Seeding is best-effort and must never crash the app / startup.
         return 0
+
+
+def _clean_seed_by_qnum() -> dict[int, tuple[str, str]]:
+    """Map SOA question number -> (clean_front_html, clean_back_html)."""
+    from anki.brainlift.examp_seed import SEED_CARDS
+
+    out: dict[int, tuple[str, str]] = {}
+    for c in SEED_CARDS:
+        m = _QNUM_RE.search(c.get("back", ""))
+        if m:
+            out[int(m.group(1))] = (c.get("front", ""), c.get("back", ""))
+    return out
+
+
+def repair_garbled_seed(col: Collection) -> tuple[int, int]:
+    """One-time repair of stale/garbled SOA Exam P seed cards. Returns (repaired, removed).
+
+    Older builds seeded/imported from a *pypdf* extraction that scrambled
+    MathType glyph runs, so e.g. ``P[A ∪ B] = 0.7`` was stored as
+    ``[ ] 0.7PA B∪=`` — unreadable during review. The bundled
+    :mod:`anki.brainlift.examp_seed` is now the clean, layout-aware
+    (pdfplumber) content. This heals an already-populated collection in place:
+
+    * For every SOA-attributed note, it rewrites the fields to the clean version
+      matched by the note's SOA question number (preserves the note/card id, so
+      scheduling + review history are kept and the change syncs cleanly).
+    * Notes whose question number has no clean counterpart (the ones the
+      readability gate dropped as inherently un-linearizable 2-D math) are
+      removed, so no garbled card can surface in review.
+
+    Only touches notes carrying the SOA attribution, so a user's own cards are
+    never modified or deleted. Idempotent + guarded by a synced config flag, so
+    it runs once on desktop and the fix propagates to the phone via normal sync.
+    """
+    try:
+        if col.get_config(REPAIR_FLAG, False):
+            return (0, 0)
+        clean = _clean_seed_by_qnum()
+        if not clean:
+            return (0, 0)
+        try:
+            nids = col.find_notes('"Sample Questions/Solutions, Q"')
+        except Exception:
+            nids = col.find_notes("SOA Exam P")
+        repaired = 0
+        remove_ids: list[int] = []
+        for nid in nids:
+            note = col.get_note(nid)
+            if len(note.fields) < 2:
+                continue
+            m = _QNUM_RE.search(note.fields[0] + "\n" + note.fields[1])
+            if not m:
+                continue
+            target = clean.get(int(m.group(1)))
+            if target is None:
+                # SOA card whose question was dropped as un-linearizable garble.
+                remove_ids.append(nid)
+                continue
+            cf, cb = target
+            if note.fields[0] != cf or note.fields[1] != cb:
+                note.fields[0] = cf
+                note.fields[1] = cb
+                col.update_note(note)
+                repaired += 1
+        removed = 0
+        if remove_ids:
+            col.remove_notes(remove_ids)
+            removed = len(remove_ids)
+        col.set_config(REPAIR_FLAG, True)
+        return (repaired, removed)
+    except Exception:
+        # Repair is best-effort and must never crash the app / startup.
+        return (0, 0)
