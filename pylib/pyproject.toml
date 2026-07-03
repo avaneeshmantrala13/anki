@@ -28,13 +28,9 @@ dependencies = [
   "distro; sys_platform != 'darwin' and sys_platform != 'win32'",
 ]
 
-# BrainLift optional AI extra. The default OpenAI client uses the REST API via
-# `requests` (already a core dependency) so it mirrors the mobile OkHttp call and
-# needs no extra install; installing `anki[ai]` additionally pulls the official
-# `openai` SDK for anyone who prefers it. The key is read only from the
-# OPENAI_API_KEY environment variable.
-[project.optional-dependencies]
-ai = ["openai>=1.0"]
+# BrainLift AI uses the OpenAI chat-completions REST API via `requests` (already
+# a core dependency), mirroring the mobile OkHttp call, so no extra SDK is
+# required. The key is read only from the OPENAI_API_KEY environment variable.
 
 [build-system]
 requires = ["hatchling"]
