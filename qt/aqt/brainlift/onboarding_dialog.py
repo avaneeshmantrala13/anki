@@ -36,7 +36,7 @@ class OnboardingDialog(QDialog):
     def __init__(self, mw: AnkiQt, parent=None) -> None:
         super().__init__(parent or mw)
         self.mw = mw
-        self.setWindowTitle("BrainLift — Set up your study plan")
+        self.setWindowTitle("BrainLift — Set your goals")
         self.setMinimumWidth(460)
         self._build()
 

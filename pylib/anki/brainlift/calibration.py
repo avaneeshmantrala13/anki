@@ -371,6 +371,35 @@ def save_calibration(col: Collection, result: CalibrationResult) -> None:
     col.set_config(CONFIG_KEY, asdict(result))
     # Mirror the multiplier to a flat key the scheduling layer reads.
     col.set_config(CONFIG_MULTIPLIER_KEY, result.authority_multiplier)
+    _log_activity(col, result)
+
+
+def _log_activity(col: Collection, result: CalibrationResult) -> None:
+    """Record this calibration run in the AI Activity log (best-effort).
+
+    Surfaces Feature 1 working in the backend: the source card behind each
+    generated analog (named-source traceability), whether real OpenAI or the
+    deterministic fallback produced them, and the resulting authority multiplier.
+    """
+    try:
+        from anki.brainlift import activity
+
+        detail: list[str] = []
+        for it in result.items:
+            src = activity.clean_text(it.generated_source_text or it.source_front, 64)
+            q = activity.clean_text(it.generated_question, 76)
+            detail.append(f"card #{it.source_card_id}: \u201c{src}\u201d \u2192 {q}")
+        source = "real OpenAI" if result.ai_used else "deterministic fallback"
+        summary = (
+            f"Calibration run \u00b7 accuracy {result.accuracy:.0%}, "
+            f"authority multiplier {result.authority_multiplier:.2f} "
+            f"({source}, {len(result.items)} analogs generated)"
+        )
+        activity.log_event(
+            col, "calibration", "run", summary, detail, used_ai=result.ai_used
+        )
+    except Exception:
+        pass
 
 
 def load_calibration(col: Collection) -> CalibrationResult | None:

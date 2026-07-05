@@ -427,8 +427,44 @@ def record_answer(
                 "at": int(now if now is not None else time.time()),
             },
         )
+        _log_activity(col, decision, state, now)
     save_session(col, state)
     return decision
+
+
+def _log_activity(
+    col: Collection,
+    decision: FatigueDecision,
+    state: dict[str, Any],
+    now: int | None,
+) -> None:
+    """Record a fired intervention in the AI Activity log (best-effort).
+
+    Surfaces Feature 2 working in the backend: the learned model's probability,
+    the smoothed signals that drove it, and the chosen intervention."""
+    try:
+        from anki.brainlift import activity
+
+        fv = model_feature_vector(state, now)
+        feats = ", ".join(
+            f"{name} {val:.2f}" for name, val in zip(FATIGUE_MODEL_FEATURES, fv)
+        )
+        engine = "learned model" if decision.used_model else "deterministic heuristic"
+        summary = (
+            f"Fatigue offload fired \u00b7 p(drained)={decision.probability:.2f} "
+            f"({engine}) \u2192 {decision.type}"
+        )
+        detail = [
+            f"decision: {decision.banner}",
+            f"signals: {feats}",
+            f"heuristic drain {decision.drain:.2f} \u00b7 session {decision.session_minutes:.0f} min",
+        ]
+        activity.log_event(
+            col, "fatigue", "intervention", summary, detail, used_ai=decision.used_model,
+            at=now,
+        )
+    except Exception:
+        pass
 
 
 def last_intervention(col: Collection) -> dict[str, Any] | None:
