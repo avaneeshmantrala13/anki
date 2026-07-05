@@ -131,6 +131,10 @@ class TopicReport:
     average_retrievability: float
     covered: bool
     status: str
+    # Feature 1: confidence-authority-adjusted review gap, computed in the Rust
+    # engine as clamp(1 - mastered_fraction * confidence_authority, 0, 1). Equals
+    # (1 - mastered_fraction) when authority is 1.0 (no calibration adjustment).
+    effective_mastery_gap: float = 1.0
 
     @property
     def mastered_fraction(self) -> float:
@@ -199,13 +203,24 @@ def classify_status(total_cards: int, reviewed_cards: int, mastered_cards: int) 
 # --- Public entry point ------------------------------------------------------
 
 
-def coverage_report(col: Collection, mastered_threshold: float = 0.0) -> CoverageReport:
+def coverage_report(
+    col: Collection,
+    mastered_threshold: float = 0.0,
+    confidence_authority: float = 0.0,
+) -> CoverageReport:
     """Compute the Exam P coverage/mastery report for the given collection.
 
     Calls the shared Rust ``topic_mastery`` engine once for all main topics,
     classifies each topic's status, and aggregates weighted coverage. No AI.
+
+    ``confidence_authority`` (BrainLift Feature 1, 0-1) is passed to the engine,
+    which returns a confidence-authority-adjusted ``effective_mastery_gap`` per
+    topic; the study planner consumes that Rust-computed value directly. Values
+    <= 0 fall back to full authority (1.0).
     """
-    response = col.topic_mastery(main_topic_searches(), mastered_threshold)
+    response = col.topic_mastery(
+        main_topic_searches(), mastered_threshold, confidence_authority
+    )
     by_name = {t.name: t for t in response.topics}
 
     reports: list[TopicReport] = []
@@ -226,6 +241,9 @@ def coverage_report(col: Collection, mastered_threshold: float = 0.0) -> Coverag
                 average_retrievability=stats.average_retrievability if stats else 0.0,
                 covered=total > 0,
                 status=classify_status(total, reviewed, mastered),
+                effective_mastery_gap=(
+                    stats.effective_mastery_gap if stats else 1.0
+                ),
             )
         )
 

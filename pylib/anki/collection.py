@@ -1029,6 +1029,7 @@ class Collection(DeprecatedNamesMixin):
         self,
         topics: Sequence[tuple[str, str]],
         mastered_threshold: float = 0.0,
+        confidence_authority: float = 0.0,
     ) -> stats_pb2.TopicMasteryResponse:
         """BrainLift: deterministic per-topic mastery & coverage.
 
@@ -1037,6 +1038,9 @@ class Collection(DeprecatedNamesMixin):
         (e.g. ("Probability", "tag:ExamP::Probability")). `mastered_threshold`
         is the current retrievability (0-1) at or above which a card counts as
         mastered; values <= 0 fall back to the backend default (0.9).
+        `confidence_authority` is the BrainLift Feature 1 multiplier (0-1); the
+        engine returns a confidence-authority-adjusted `effective_mastery_gap`
+        per topic. Values <= 0 fall back to 1.0 (no adjustment).
 
         Contains no AI: every value is derived from existing review history.
         """
@@ -1046,6 +1050,7 @@ class Collection(DeprecatedNamesMixin):
                 for name, search in topics
             ],
             mastered_threshold=mastered_threshold,
+            confidence_authority=confidence_authority,
         )
         return stats_pb2.TopicMasteryResponse.FromString(
             self._backend.topic_mastery_raw(request.SerializeToString())

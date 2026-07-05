@@ -6,9 +6,11 @@
 On every graded review we measure the response time and correctness, attribute
 it to an Exam P sub-topic (via the card's ``ExamP::*`` tags), and fold it into
 the synced fatigue session state (:mod:`anki.brainlift.fatigue`). When the
-detector decides to intervene we show a clearly visible banner — the actual
-easier-card / interleave selection is a scheduling concern documented in the
-spec; here we surface the decision so the user can see cognitive-offload working.
+detector decides to intervene we (a) actually reorder the live review queue via
+:func:`anki.brainlift.fatigue.apply_offload` — pulling an easier or a
+different-topic card to the front so the *next* card served reflects the offload
+— and (b) show a clearly visible banner so the user can see cognitive-offload
+working.
 """
 
 from __future__ import annotations
@@ -56,10 +58,15 @@ def _on_answer(reviewer: Reviewer, card: Card, ease: int) -> None:
         correct = ease >= 2
         topic = _topic_key_for_card(card)
         decision = fx.record_answer(mw.col, rt, correct, topic)
-        if decision.intervene and decision.banner:
-            from aqt.utils import tooltip
+        if decision.intervene:
+            # Actually apply the offload to the live queue (not just a banner):
+            # reorder so the next served card is easier / a different topic.
+            served = fx.apply_offload(mw.col, decision, topic)
+            if decision.banner:
+                from aqt.utils import tooltip
 
-            tooltip(f"🧠 {decision.banner}", period=4000, parent=mw)
+                suffix = " — reordering your next card" if served else ""
+                tooltip(f"🧠 {decision.banner}{suffix}", period=4000, parent=mw)
     except Exception:
         # Never let fatigue tracking disrupt reviewing.
         pass
