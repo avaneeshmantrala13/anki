@@ -12,13 +12,35 @@ from __future__ import annotations
 
 import sys
 
+import ablation
 import baseline
 import fatigue_model_eval
 import gold_eval
 import leakage_check
+import memory_calibration_eval
 import paraphrase_gap
+import performance_holdout_eval
 import prompt_injection_check
 import run_eval
+
+
+def _ablation_pass() -> bool:
+    """Run the 3-build ablation and reduce its dict result to a PASS/FAIL.
+
+    ``ablation.run`` prints its own report and returns a results dict (no single
+    PASS line), so aggregate the same directional check the smoke test asserts:
+    the full app must be at least as good as both ablated builds AND beat stock
+    Anki on the pre-declared primary metric.
+    """
+    r = ablation.run()
+    full = r["builds"]["full"]["mean"]
+    passed = (
+        full >= r["builds"]["ablation"]["mean"]
+        and full >= r["builds"]["stock"]["mean"]
+        and r["diff_full_minus_stock"]["mean"] > 0.0
+    )
+    print(f"RESULT: {'PASS' if passed else 'FAIL'}")
+    return passed
 
 
 def main() -> int:
@@ -32,6 +54,9 @@ def main() -> int:
         ("prompt_injection_check", lambda: prompt_injection_check.run(live)),
         ("paraphrase_gap", paraphrase_gap.run),
         ("fatigue_model_eval", lambda: fatigue_model_eval.run(live)),
+        ("memory_calibration_eval", lambda: memory_calibration_eval.run(live)),
+        ("performance_holdout_eval", lambda: performance_holdout_eval.run(live)),
+        ("ablation_study", _ablation_pass),
     ]:
         print("\n" + "=" * 68)
         results[name] = bool(fn())
