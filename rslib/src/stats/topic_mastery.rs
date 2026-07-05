@@ -36,6 +36,14 @@ impl Collection {
         } else {
             input.mastered_threshold
         };
+        // BrainLift Feature 1: the confidence-authority multiplier scales how
+        // much demonstrated mastery is allowed to suppress a topic's review
+        // priority. Values <= 0 mean "no calibration yet" -> full authority.
+        let authority = if input.confidence_authority <= 0.0 {
+            1.0f32
+        } else {
+            input.confidence_authority.clamp(0.0, 1.0)
+        };
         let timing = self.timing_today()?;
         let fsrs = FSRS::new(None)?;
 
@@ -85,6 +93,15 @@ impl Collection {
                 0.0
             };
 
+            // Confidence-authority-adjusted review gap, computed in-engine so
+            // the scheduling layer consumes the Rust value directly.
+            let mastered_fraction = if total_cards > 0 {
+                mastered_cards as f32 / total_cards as f32
+            } else {
+                0.0
+            };
+            let effective_mastery_gap = (1.0 - mastered_fraction * authority).clamp(0.0, 1.0);
+
             topics.push(TopicMastery {
                 name: topic.name.clone(),
                 total_cards,
@@ -93,6 +110,7 @@ impl Collection {
                 total_reviews,
                 average_retrievability,
                 covered: total_cards > 0,
+                effective_mastery_gap,
             });
         }
 
@@ -109,6 +127,14 @@ mod test {
     use crate::prelude::*;
 
     fn request(topics: &[(&str, &str)], threshold: f32) -> TopicMasteryRequest {
+        request_with_authority(topics, threshold, 0.0)
+    }
+
+    fn request_with_authority(
+        topics: &[(&str, &str)],
+        threshold: f32,
+        confidence_authority: f32,
+    ) -> TopicMasteryRequest {
         TopicMasteryRequest {
             topics: topics
                 .iter()
@@ -118,6 +144,7 @@ mod test {
                 })
                 .collect(),
             mastered_threshold: threshold,
+            confidence_authority,
         }
     }
 
@@ -198,6 +225,60 @@ mod test {
         assert!(topic.total_reviews >= 1);
         assert_eq!(topic.mastered_cards, 1);
         assert!(topic.average_retrievability > 0.5);
+        Ok(())
+    }
+
+    /// A topic with no cards has a full effective review gap (nothing mastered),
+    /// regardless of the authority multiplier.
+    #[test]
+    fn empty_topic_has_full_effective_gap() -> Result<()> {
+        let mut col = Collection::new();
+        let resp = col.compute_topic_mastery(request_with_authority(
+            &[("Probability", "tag:ExamP::Nope")],
+            0.0,
+            0.5,
+        ))?;
+        assert_eq!(resp.topics[0].effective_mastery_gap, 1.0);
+        Ok(())
+    }
+
+    /// The confidence-authority multiplier is applied INSIDE the engine: a
+    /// fully-mastered topic's review gap is fully suppressed at authority 1.0
+    /// but only half-suppressed at authority 0.5 (a poorly-calibrated learner
+    /// keeps more review coverage). Authority <= 0 falls back to 1.0.
+    #[test]
+    fn authority_scales_effective_gap() -> Result<()> {
+        let mut col = Collection::new();
+        col.set_config_bool(BoolKey::Fsrs, true, false)?;
+        // One card, reviewed with a passing grade -> retrievability ~1 ->
+        // mastered_fraction == 1.0.
+        add_tagged_note(&mut col, "ExamP::Probability");
+        col.answer_easy();
+        col.clear_study_queues();
+
+        let full = col.compute_topic_mastery(request_with_authority(
+            &[("Probability", "tag:ExamP::Probability")],
+            0.0,
+            1.0,
+        ))?;
+        assert_eq!(full.topics[0].mastered_cards, 1);
+        // authority 1.0: gap = 1 - 1*1 = 0 (fully trust demonstrated mastery)
+        assert!(full.topics[0].effective_mastery_gap < 0.001);
+
+        let half = col.compute_topic_mastery(request_with_authority(
+            &[("Probability", "tag:ExamP::Probability")],
+            0.0,
+            0.5,
+        ))?;
+        // authority 0.5: gap = 1 - 1*0.5 = 0.5 (keep half the review coverage)
+        assert!((half.topics[0].effective_mastery_gap - 0.5).abs() < 0.01);
+
+        let default_auth = col.compute_topic_mastery(request_with_authority(
+            &[("Probability", "tag:ExamP::Probability")],
+            0.0,
+            0.0, // <= 0 -> full authority 1.0
+        ))?;
+        assert!(default_auth.topics[0].effective_mastery_gap < 0.001);
         Ok(())
     }
 }

@@ -76,12 +76,14 @@ def _round_half(value: float) -> float:
 
 def build_study_plan(col: Collection, today: date | None = None) -> StudyPlan:
     """Build a deterministic study plan from the persisted signals."""
-    coverage = exam_p.coverage_report(col)
-    diag_acc = _diagnostic_accuracy_by_topic(col)
     # Feature 1: confidence-authority multiplier (synced). Scales how strongly a
     # topic's demonstrated "knownness" is allowed to suppress its review
     # priority. Defaults to 1.0 (full authority) when no calibration exists.
+    # We pass it INTO the Rust engine so the authority-adjusted mastery gap
+    # (``effective_mastery_gap``) is computed in-engine, not in client code.
     authority = calib.calibration_multiplier(col)
+    coverage = exam_p.coverage_report(col, confidence_authority=authority)
+    diag_acc = _diagnostic_accuracy_by_topic(col)
 
     profile = ob.load_onboarding(col)
     if profile is not None:
@@ -95,7 +97,10 @@ def build_study_plan(col: Collection, today: date | None = None) -> StudyPlan:
     priorities: list[TopicPriority] = []
     for topic in coverage.topics:
         importance = topic.weight / _MAX_WEIGHT
-        mastery_gap = calib.effective_mastery_gap(topic.mastered_fraction, authority)
+        # Rust-computed, confidence-authority-adjusted gap (Feature 1). The
+        # ``calib.effective_mastery_gap`` Python formula is retained only as the
+        # parity reference the engine mirrors (and the Kotlin fallback).
+        mastery_gap = topic.effective_mastery_gap
         coverage_gap = 1.0 if topic.total_cards == 0 else (1.0 - topic.reviewed_fraction)
         if topic.key in diag_acc:
             diagnostic_gap = 1.0 - diag_acc[topic.key]

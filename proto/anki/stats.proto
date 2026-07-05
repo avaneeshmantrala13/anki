@@ -35,6 +35,13 @@ message TopicMasteryRequest {
   // Current retrievability (0-1) at or above which a card counts as
   // "mastered". Values <= 0 fall back to a default of 0.9.
   float mastered_threshold = 2;
+  // BrainLift Feature 1: the learner's confidence-authority multiplier (0-1),
+  // from the calibration test. It scales how strongly a topic's demonstrated
+  // "knownness" is allowed to suppress its future review priority — a poorly
+  // calibrated (over-confident) learner has their self-rating down-weighted, so
+  // the engine keeps more review coverage. Values <= 0 fall back to 1.0 (full
+  // authority, i.e. no adjustment).
+  float confidence_authority = 3;
 }
 
 message TopicSearch {
@@ -62,6 +69,13 @@ message TopicMastery {
   float average_retrievability = 6;
   // Whether the topic has any cards at all (coverage signal).
   bool covered = 7;
+  // BrainLift Feature 1: how much this topic still needs review AFTER applying
+  // the learner's confidence authority, computed in-engine as
+  // clamp(1 - mastered_fraction * confidence_authority, 0, 1). The scheduling
+  // layer (study planner) uses this Rust-computed value directly, so the
+  // confidence-authority adjustment is applied inside the engine rather than in
+  // client code. Equals (1 - mastered_fraction) when authority defaults to 1.0.
+  float effective_mastery_gap = 8;
 }
 
 message ReviewLogs {

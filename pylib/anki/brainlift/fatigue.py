@@ -433,3 +433,93 @@ def record_answer(
 
 def last_intervention(col: Collection) -> dict[str, Any] | None:
     return col.get_config(CONFIG_LAST_INTERVENTION_KEY, None)
+
+
+# --- applying the intervention to the LIVE review queue ---------------------
+# The detector doesn't just show a banner: when it fires we actually reorder the
+# review queue so the NEXT card served reflects the cognitive offload —
+#   * interleave      -> pull a DIFFERENT Exam P topic to the front (variety),
+#   * ease_difficulty -> pull the easiest available card (lowest FSRS
+#                        difficulty — a well-known, low-load card) to the front.
+# New cards are repositioned to the head of the new queue; already-seen cards
+# are pulled forward with a due-date change. Everything is best-effort and can
+# never crash reviewing. Mirrored in Kotlin (BrainLiftFatigue.applyOffload).
+
+
+def _card_topic_key(col: Collection, card_id: int) -> str:
+    """The Exam P main-topic key for a card, from its ``ExamP::<Topic>::*`` tag."""
+    try:
+        card = col.get_card(int(card_id))
+        for tag in card.note().tags:
+            if tag.startswith("ExamP::"):
+                parts = tag.split("::")
+                if len(parts) >= 2:
+                    return parts[1]
+    except Exception:
+        pass
+    return ""
+
+
+def _card_difficulty(col: Collection, card_id: int) -> float:
+    """FSRS difficulty for a card (0..1-ish). Unknown/new -> 1.0 (treated as
+    hardest) so 'ease' prefers already-seen, low-difficulty cards."""
+    try:
+        card = col.get_card(int(card_id))
+        ms = getattr(card, "memory_state", None)
+        if ms is not None:
+            return float(ms.difficulty)
+    except Exception:
+        pass
+    return 1.0
+
+
+def select_offload_card(
+    col: Collection, decision_type: str | None, current_topic_key: str = ""
+) -> int | None:
+    """Pick the card the offload should serve next, or None if none is suitable.
+
+    Pure selection (no mutation) so it can be unit-tested without touching the
+    queue. ``interleave`` returns a due/new card in a different main topic;
+    ``ease_difficulty`` returns the lowest-FSRS-difficulty due/new card."""
+    try:
+        candidates = [int(c) for c in col.find_cards("is:due OR is:new")]
+    except Exception:
+        candidates = []
+    if not candidates:
+        return None
+    if decision_type == TYPE_INTERLEAVE:
+        for cid in candidates:
+            tk = _card_topic_key(col, cid)
+            if tk and tk != current_topic_key:
+                return cid
+        return None
+    if decision_type == TYPE_EASE:
+        ranked = sorted(candidates, key=lambda cid: _card_difficulty(col, cid))
+        return ranked[0] if ranked else None
+    return None
+
+
+def apply_offload(
+    col: Collection, decision: FatigueDecision, current_topic_key: str = ""
+) -> int | None:
+    """Reorder the live queue for an active intervention. Returns the card id
+    pulled to the front, or None. Best-effort; never raises."""
+    if not getattr(decision, "intervene", False) or not decision.type:
+        return None
+    try:
+        target = select_offload_card(col, decision.type, current_topic_key)
+        if target is None:
+            return None
+        card = col.get_card(target)
+        # New cards (type 0) are repositioned to the head of the new queue;
+        # anything already in scheduling is pulled forward to "due today".
+        if int(getattr(card, "type", 0)) == 0:
+            col.sched.reposition_new_cards(
+                [target], starting_from=0, step_size=1, randomize=False,
+                shift_existing=True,
+            )
+        else:
+            col.sched.set_due_date([target], "0")
+        return target
+    except Exception:
+        return None
