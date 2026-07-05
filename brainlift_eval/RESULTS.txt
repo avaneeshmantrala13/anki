@@ -86,8 +86,92 @@ PRE-DECLARED cutoffs: accuracy >= 0.80 AND AUC >= 0.85
   accuracy: 0.5283   AUC: 0.9242
   learned model BEATS baseline: True (acc +0.3783, AUC +0.0464)
 -- integrity --
-  train/test separation (no leakage): True (overlapping held-out vectors: 0)
+  train/test separation (session-id namespaces disjoint): True (shared session ids: 0; train seed=12345x1600, test seed=98765x600)
+    (informational) coincidental identical feature vectors: 0
   named-source documented in BRAINLIFT_AI_SPEC.md: True
+RESULT: PASS
+
+====================================================================
+== Memory calibration — FSRS predicted recall vs actual outcome ==
+data: SIMULATED, FSRS-5-grounded (NOT a real review log) — see header
+held-out reviews: 4000 (seed=71072026); train reviews: 4000 (seed=20260705)
+FSRS curve: R(t) = (1 + 0.234568*t/S)^-0.5
+
+Memory calibration — reliability diagram (SIMULATED, FSRS-grounded)
+
+          bin       n  predicted   observed  diagram
+  ------------------------------------------------------------
+      0.0-0.1     205      0.059      0.127  ###
+      0.1-0.2     417      0.151      0.163  ###
+      0.2-0.3     326      0.248      0.261  #####
+      0.3-0.4     256      0.351      0.398  ########
+      0.4-0.5     233      0.449      0.421  ########
+      0.5-0.6     242      0.548      0.517  ##########
+      0.6-0.7     201      0.649      0.701  ##############
+      0.7-0.8     247      0.754      0.761  ###############
+      0.8-0.9     435      0.857      0.880  ##################
+      0.9-1.0    1438      0.972      0.974  ###################
+  ------------------------------------------------------------
+  Brier score : 0.1229   (PASS cutoff <= 0.25)
+  Log-loss    : 0.4391
+  ECE         : 0.0187
+
+reliability curve monotone-ish (observed rises with predicted): True
+artifacts: memory_calibration_reliability.csv, memory_calibration_reliability.txt
+PRE-DECLARED cutoff: Brier <= 0.25 AND all metrics finite
+RESULT: PASS
+
+====================================================================
+== Performance model — held-out correctness prediction ==
+data: SIMULATED exam-style questions (NOT real students) — see header
+fit questions: 3000 (seed=424242); held-out questions: 3000 (seed=909090)
+fitted logistic-regression predictor:
+    bias = -0.2180
+    w[mastery   ] = +2.4624
+    w[difficulty] = -2.0700
+    w[timing    ] = -0.9316
+    w[coverage  ] = +1.1225
+-- held-out (never seen during fit) --
+  accuracy: 0.7240
+  log-loss: 0.5539
+  AUC:      0.7963
+-- baseline: predict majority class (=1) --
+  accuracy: 0.5173
+  model lift over baseline: +0.2067
+artifact: performance_holdout_results.csv
+PRE-DECLARED cutoffs: accuracy >= 0.65 AND lift >= 0.05
+RESULT: PASS
+
+====================================================================
+== BrainLift 3-build ablation study (SIMULATED) ==
+PRE-DECLARED primary metric: accuracy on a held-out, mixed-topic question set after a fixed study budget
+cohort: 60 seeded learners | budget: 150 study-slots (identical across builds) | held-out test: 120 mixed-topic questions
+NOTE: mechanistic simulation, not real students (see DATA_PROVENANCE.md).
+
+build                                                 accuracy        95% CI
+----------------------------------------------------------------------------
+A  full app (fatigue offload + calibration authority ON)     74.6%       ±1.1 pp
+B  ablation (both features OFF)                          70.2%       ±1.1 pp
+C  stock Anki (plain scheduling)                         70.8%       ±1.1 pp
+----------------------------------------------------------------------------
+paired A−B (feature effect): +4.4 pp (95% CI ±0.6) -> positive (CI excludes 0)
+paired A−C (vs stock):       +3.8 pp (95% CI ±0.4) -> positive (CI excludes 0)
+  A−B for mis-calibrated  (n=31): +4.8 pp   [fatigue offload + calibration authority]
+  A−B for well-calibrated (n=29): +4.0 pp   [~fatigue offload only; calibration inert]
+  => isolated calibration-authority effect (diff-in-diff): +0.8 pp
+
+CONCLUSION
+Under the stated simulation assumptions, the full app (A) beats stock Anki (C)
+by +3.8 pp (95% CI ±0.4) — positive (CI excludes 0) — and beats the
+feature-ablated build (B) by +4.4 pp (95% CI ±0.6) — positive (CI excludes 0).
+Decomposing that A−B gain: the FATIGUE OFFLOAD drives most of it
+(well-calibrated learners, for whom calibration authority is inert, still gain
++4.0 pp). The CALIBRATION AUTHORITY adds only a small / near-null incremental
++0.8 pp for mis-calibrated learners (difference-in-differences). So this sim
+finds fatigue offload clearly helpful but calibration authority's isolated
+benefit modest — reported honestly rather than inflated. All effects are
+SIMULATED and hold only insofar as the modeled mechanisms are real; they are
+NOT evidence from live students.
 RESULT: PASS
 
 ====================================================================
@@ -99,4 +183,7 @@ SUMMARY
   prompt_injection_check: PASS
   paraphrase_gap        : PASS
   fatigue_model_eval    : PASS
+  memory_calibration_eval: PASS
+  performance_holdout_eval: PASS
+  ablation_study        : PASS
 OVERALL: PASS

@@ -10,11 +10,16 @@ coverage and a rule-based study plan. Every number comes from transparent rules.
 
 - **Chosen exam:** **SOA Exam P** (Probability). Readiness is reported on the
   conventional 0–10 scale (6 = pass).
-- **Shared logic, honestly:** desktop and mobile share Anki's real Rust FSRS
-  scheduler and the collection/sync layer. The new `TopicMastery` Rust RPC runs
-  on **desktop**; the **AnkiDroid** fork links the stock Anki backend and
-  reimplements the same deterministic coverage/measurement aggregation in Kotlin
-  (identical formulas, thresholds, and config shapes), so results match.
+- **Shared logic, honestly (what runs where):** desktop and mobile share Anki's
+  real core — the Rust `rslib` collection, the **FSRS** scheduler, **sync**, and
+  SQLite storage. The forked **`TopicMastery` Rust RPC runs on the DESKTOP only.**
+  It does **not** ship to the phone: the **AnkiDroid** fork links the *stock,
+  published* Anki backend and **reimplements the identical coverage/measurement
+  aggregation in Kotlin** (`BrainLiftEngine.kt`; same formulas, thresholds, and
+  config shapes), so results match desktop. Equivalence is **verified by a parity
+  test** (`BrainLiftParityTest`), not assumed. Compiling the forked backend into
+  AnkiDroid so it can call `TopicMastery` directly is documented **future work**.
+  See [`docs/BRAINLIFT_ARCHITECTURE.md`](./docs/BRAINLIFT_ARCHITECTURE.md).
 
 ### Optional AI features (opt-in; the three scores work with AI OFF)
 

@@ -23,10 +23,24 @@ python3 leakage_check.py   # near-duplicate / leakage scan vs the gold set
 python3 prompt_injection_check.py  # prompt-injection resistance (Feature 1)
 python3 paraphrase_gap.py  # original-recall vs analog-accuracy gap
 python3 fatigue_model_eval.py    # Feature 2 LEARNED fatigue model: held-out acc/AUC/log-loss
+python3 memory_calibration_eval.py   # Memory model: FSRS predicted-recall calibration (Brier/log-loss/ECE + reliability diagram)
+python3 performance_holdout_eval.py  # Performance model: held-out correctness prediction (accuracy vs baseline, AUC, log-loss)
+python3 ablation.py                  # 3-build ablation (full app vs feature-ablated vs stock Anki) on a held-out test
 python3 train_fatigue_model.py   # (re)train the Feature 2 model offline; prints shipped weights
 ```
 
-Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
+Standalone one-command tools (NOT in the default `run_all.py` — they are slower and
+build/kill throwaway collections; see [`BENCHMARKS.md`](./BENCHMARKS.md)):
+
+```bash
+out/pyenv/bin/python brainlift_eval/bench.py         # 50k-card performance benchmark (p50/p95/worst vs budgets)
+out/pyenv/bin/python brainlift_eval/crash_test.py    # kill-mid-review durability test (asserts zero DB corruption)
+```
+
+Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt). How the simulated
+datasets are generated and why they are honest is documented in
+[`DATA_PROVENANCE.md`](./DATA_PROVENANCE.md); the standalone benchmark tools and
+budgets are in [`BENCHMARKS.md`](./BENCHMARKS.md).
 
 ## What each script proves (maps to SpeedRunner AI requirements)
 
@@ -39,6 +53,9 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 | `prompt_injection_check.py` | **Prompt-injection resistance** (source content is interpolated into the prompt) | Feeds NAMED injection payloads embedded in source-card text through the generator and asserts the served output ignores them (valid MCQ, no system-prompt leak, no instruction-following); also proves a simulated **compromised** model is BLOCKED by the validator (`validate_analog`). |
 | `paraphrase_gap.py` | Performance != memory | Compares original-card recall vs reworded-analog accuracy over 30 cards. |
 | `fatigue_model_eval.py` | **Feature 2 learned model** meets the AI bar | Held-out **accuracy / AUC / log-loss** of the SHIPPED logistic-regression fatigue model vs a **pre-declared** cutoff (acc ≥ 0.80 AND AUC ≥ 0.85); **baseline beat** vs the previous fixed-threshold heuristic on the same held-out set; **train/test separation (leakage) check**; asserts the three named papers are documented. |
+| `memory_calibration_eval.py` | **Memory model is calibrated** (is an "80% recall" claim actually 80%?) | Scores the FSRS-5 predicted-recall probability against simulated-but-FSRS-grounded outcomes on a HELD-OUT pool with **Brier score / log-loss / ECE** + a 10-bin **reliability diagram**; **pre-declared** cutoff Brier ≤ 0.25 and all metrics finite. Writes `memory_calibration_reliability.{csv,txt}`. Data is SIMULATED (see `DATA_PROVENANCE.md`). |
+| `performance_holdout_eval.py` | **Performance features PREDICT unseen questions** (not just re-score the diagnostic) | Fits a small logistic regression on a FIT set of exam-style questions (features BrainLift already has: mastery/difficulty/timing/coverage) and reports **held-out accuracy / AUC / log-loss** plus **lift over the majority-class baseline**; **pre-declared** cutoff accuracy ≥ 0.65 AND lift ≥ 0.05. Writes `performance_holdout_results.csv`. Data is SIMULATED (see `DATA_PROVENANCE.md`). |
+| `ablation.py` | **The two AI features actually help** | Pre-registered 3-build ablation — A full app (fatigue offload + calibration authority ON) vs B same core with both OFF vs C stock Anki — over a cohort of seeded synthetic learners on an identical fixed study budget; primary metric = **held-out mixed-topic accuracy**, reported with 95% CIs and **paired A−B / A−C** differences (so a null is visible), plus a calibration-subgroup diff-in-diff that isolates the calibration-authority effect. Imports the SHIPPED `anki.brainlift` formulas. Data is SIMULATED (see `DATA_PROVENANCE.md`). |
 | `train_fatigue_model.py` | Offline training is reproducible | Trains the logistic regression (pure-Python GD, fixed seed) on research-grounded simulated sessions and prints the shipped bias/weights verbatim. |
 | `fatigue_sim.py` | Honest, research-grounded data | Generates the SIMULATED labeled sessions (effect sizes calibrated to Fortenbaugh 2015 / Hanzal 2024 / Hassanzadeh-Behbaha 2018); folds them through the shipped feature pipeline. |
 | every script | Named-source traceability | Each generated item carries `source_card_id` + `source_text`; scripts assert it is present. The fatigue model's named source is the three peer-reviewed papers (asserted present in the spec). |
@@ -94,6 +111,9 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 - Prompt-injection: 5/5 adversarial source cards yield a clean served MCQ; 5/5 simulated compromised outputs BLOCKED -> **PASS**
 - Paraphrase gap: original 84.9% vs analog 57.9% -> **26.9% gap**
 - Fatigue model (Feature 2, learned): held-out **acc 0.9067 / AUC 0.9706 / log-loss 0.2914** -> **PASS** (pre-declared acc >=0.80, AUC >=0.85); **beats** fixed-threshold heuristic (0.5283 / 0.9242); train/test separation clean (0 overlap)
+- Memory calibration: held-out **Brier 0.1229 / log-loss 0.4391 / ECE 0.0187**, reliability diagram monotone -> **PASS** (pre-declared Brier <=0.25)
+- Performance held-out: **accuracy 0.7240 / AUC 0.7963**, majority baseline 0.5173 -> **lift +0.2067** -> **PASS** (pre-declared acc >=0.65, lift >=0.05)
+- Ablation (3-build, 60 learners): A full **74.6%** vs B ablated **70.2%** vs C stock **70.8%**; paired **A−B +4.4 pp** and **A−C +3.8 pp** (both 95% CIs exclude 0) -> **PASS**; diff-in-diff shows fatigue offload drives most of the gain, calibration authority's isolated effect is modest (reported honestly)
 
 ## Feature 2 fatigue model — honesty note
 

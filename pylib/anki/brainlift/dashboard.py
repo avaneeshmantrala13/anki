@@ -130,30 +130,48 @@ def _score_card(title: str, body: str, subtitle: str = "") -> str:
     )
 
 
+def _score_meta(
+    confidence: str, coverage_percent: float, last_updated: int, reasons: list[str]
+) -> str:
+    """Shared metadata block for Memory & Performance (parity with Android)."""
+    updated = (
+        time.strftime("%Y-%m-%d %H:%M", time.localtime(last_updated))
+        if last_updated
+        else "—"
+    )
+    reason_html = "".join(f"<li>{html.escape(r)}</li>" for r in reasons)
+    return (
+        f"<div class='sub'>Confidence: {html.escape(confidence)} &middot; "
+        f"coverage {coverage_percent:.0f}%</div>"
+        f"<div class='sub'>Why:</div><ul class='evidence'>{reason_html}</ul>"
+        f"<div class='note'>Last updated: {html.escape(updated)}</div>"
+    )
+
+
 def _memory_card(m: measurements.MemoryScore) -> str:
     if not m.available:
         body = "<div class='big muted'>Not enough data</div>"
         sub = "Study some cards so FSRS can estimate recall."
-    else:
-        body = (
-            f"<div class='big'>{_pct(m.point)}</div>"
-            f"<div class='range'>likely {_pct(m.low)}-{_pct(m.high)}</div>"
-        )
-        sub = f"FSRS recall over {m.reviewed_cards} reviewed cards"
-    return _score_card("Memory", body, sub)
+        return _score_card("Memory", body, sub)
+    body = (
+        f"<div class='big'>{_pct(m.point)}</div>"
+        f"<div class='range'>likely {_pct(m.low)}-{_pct(m.high)}</div>"
+        + _score_meta(m.confidence_level, m.coverage_percent, m.last_updated, m.reasons)
+    )
+    return _score_card("Memory", body)
 
 
 def _performance_card(p: measurements.PerformanceScore) -> str:
     if not p.available:
         body = "<div class='big muted'>Not enough data</div>"
         sub = "Take the diagnostic to measure performance on new questions."
-    else:
-        body = (
-            f"<div class='big'>{_pct(p.point)}</div>"
-            f"<div class='range'>likely {_pct(p.low)}-{_pct(p.high)}</div>"
-        )
-        sub = f"Transfer accuracy over {p.answered} diagnostic questions"
-    return _score_card("Performance", body, sub)
+        return _score_card("Performance", body, sub)
+    body = (
+        f"<div class='big'>{_pct(p.point)}</div>"
+        f"<div class='range'>likely {_pct(p.low)}-{_pct(p.high)}</div>"
+        + _score_meta(p.confidence_level, p.coverage_percent, p.last_updated, p.reasons)
+    )
+    return _score_card("Performance", body)
 
 
 def _readiness_card(r: measurements.Readiness) -> str:

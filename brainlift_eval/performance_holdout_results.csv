@@ -1,0 +1,11 @@
+metric,value
+held_out_accuracy,0.724000
+baseline_accuracy,0.517333
+accuracy_lift,0.206667
+held_out_log_loss,0.553876
+held_out_auc,0.796292
+fitted_bias,-0.218009
+fitted_w_mastery,2.462437
+fitted_w_difficulty,-2.070024
+fitted_w_timing,-0.931604
+fitted_w_coverage,1.122472
