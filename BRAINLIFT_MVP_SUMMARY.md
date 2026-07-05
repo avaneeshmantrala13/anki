@@ -1,0 +1,202 @@
+# BrainLift for Anki — MVP Implementation Summary
+
+**Chosen exam:** SOA **Exam P** (Probability) — readiness reported on the conventional **0–10 scale** (6 = pass).
+**Built on:** a fork of Anki at `SpeedRun/anki/` (branch `brainlift-mvp`) plus a fork of **AnkiDroid** for mobile.
+**AI used:** the **core** (three scores, coverage, plan, bundled cards) is 100% deterministic and works with **zero AI services**. Two **opt-in** AI features sit on top behind a master toggle (`brainlift_ai_enabled`, default OFF): (1) metacognitive calibration analog-question generation (OpenAI), and (2) cognitive-load/fatigue detection driven by a **learned logistic-regression classifier** (trained offline on research-grounded simulated data; weights ship as shared constants for byte-identical desktop/mobile inference — no network needed). With AI OFF the app still fully produces Memory / Performance / Readiness and both features run via a deterministic fallback — a SpeedRunner hard requirement. See the "AI features" section below and `BRAINLIFT_AI_SPEC.md`.
+
+**Content source:** the study content bundled with the app is the official **SOA Exam P Sample Questions & Solutions**, freely published by the **Society of Actuaries** for candidates. Questions/solutions are reproduced for personal study; © Society of Actuaries. No content is AI-generated; classification into topics uses deterministic keyword rules only.
+
+---
+
+## What BrainLift adds to Anki
+
+BrainLift extends Anki *from the inside* (no wrapper, no second app, no second scheduler). It keeps Anki's FSRS engine, collection, review loop, and sync, and adds an Exam P measurement + planning layer that answers three **separate** questions:
+
+| Question | Measure | Source |
+|---|---|---|
+| Can the student **recall** a studied fact? | **Memory** | Anki FSRS retrievability (shared Rust engine) |
+| Can they answer a **new** exam-style question? | **Performance** | Deterministic diagnostic (transfer questions) |
+| What would they **score today**, and how sure are we? | **Readiness** | Deterministic blend + give-up rule |
+
+The three are never collapsed into one blended number.
+
+---
+
+## Core engine
+
+**How desktop and mobile actually share logic (honest wording).** Desktop and mobile share Anki's real Rust FSRS scheduler and the collection/sync layer. The new TopicMastery Rust RPC runs on desktop; AnkiDroid links the stock Anki backend and reimplements the same deterministic coverage/measurement aggregation in Kotlin (identical formulas, thresholds, and config shapes), so results match. Building the forked backend into AnkiDroid to call TopicMastery directly is documented future work. There is **not** a single shared BrainLift engine binary running on both platforms — what is shared is FSRS + the collection/sync layer and the exact deterministic formulas/thresholds/config shapes, mirrored in Python (desktop) and Kotlin (mobile).
+
+- **Rust core change — Topic Mastery & Coverage API.** New `StatsService.TopicMastery` proto RPC + Rust implementation (`rslib/src/stats/topic_mastery.rs`) that aggregates, per topic search, total/reviewed/mastered cards, total reviews, and average FSRS retrievability. Bound to Python as `Collection.topic_mastery(...)`. This RPC is called on **desktop**; AnkiDroid links the stock Anki backend and reproduces the identical aggregation in Kotlin (`BrainLiftEngine.kt`), so both platforms compute the same numbers for the same collection.
+- **Exam P topic model** (`pylib/anki/brainlift/exam_p.py`): the official syllabus as a typed hierarchy (3 main topics, 19 subtopics) with SOA weight midpoints (General Probability 26.5%, Univariate RV 47.0%, Multivariate RV 26.5%). Card→topic mapping is by Anki-native nested tags `ExamP::<Topic>::<Subtopic>`. `coverage_report()` classifies each topic **Not Started / In Progress / Covered / Mastered**.
+- **Deterministic onboarding / diagnostic / planner / measurements / dashboard** (`pylib/anki/brainlift/*.py`): named thresholds, human-readable reasons, and an explicit **give-up rule** (readiness is withheld unless ≥200 graded reviews AND ≥50% coverage AND a completed diagnostic). All state is persisted in the collection config, so it rides Anki's existing sync and survives restarts.
+
+---
+
+## NEW: Default Exam P content (deterministic, no AI)
+
+New users used to land on an **empty** collection, so coverage/readiness had nothing to measure. BrainLift now ships the official SOA Exam P sample questions inside the app and seeds them automatically for a first-time, empty collection.
+
+- **Bundled data module** `pylib/anki/brainlift/examp_seed.py` — a pure-Python `SEED_CARDS: list[dict]` (each `{"front", "back", "tags"}`, 437 cards) generated from the SAME sourced SOA content used for the validated `.apkg`. A `.py` module is always packaged, so the content is guaranteed to ship in the wheel and installer (no binary-data packaging risk). A short SOA attribution string is in the module docstring **and** on every card back.
+- **Seeder** `pylib/anki/brainlift/default_content.py` → `maybe_seed_default_deck(col) -> int`:
+  - Returns `0` (does nothing) if the config flag `brainlift_seeded_default` is already set, **or** if the collection already contains any cards (`select count() from cards`) — i.e. it never touches a user's own content.
+  - Otherwise creates the deck **"Exam P — Sample Questions"**, ensures a **Basic** notetype, adds all `SEED_CARDS` as notes with their `ExamP::*` tags, sets `brainlift_seeded_default = True`, and returns the number of notes added.
+  - Idempotent and wrapped in `try/except` so it can never crash startup.
+- **Desktop trigger** (`qt/aqt/brainlift/__init__.py`): on `gui_hooks.profile_did_open`, the deferred landing now calls `maybe_seed_default_deck(mw.col)` (via `_seed_and_land`) once, then `col.reset()` so coverage/landing immediately reflect the seeded cards.
+- **Mobile:** no Android code change is needed — the seeded deck, cards, and tags reach mobile through normal Anki sync.
+
+**Seed contents (437 cards total):**
+
+| Exam P main topic | Cards |
+|---|---|
+| General Probability | 229 |
+| Univariate Random Variables | 198 |
+| Multivariate Random Variables | 10 |
+| **Total** | **437** |
+
+Regenerate the module from the validated deck with:
+```bash
+python anki-analysis/build_examp_deck.py --emit-seed
+```
+
+---
+
+## Mobile: AnkiDroid BrainLift implementation
+
+- AnkiDroid links the **stock Anki backend** (shared Rust FSRS scheduler + collection/sync). It does **not** call the desktop-only TopicMastery RPC; instead it **reimplements the same deterministic coverage/measurement aggregation in Kotlin** (`AnkiDroid/.../brainlift/BrainLiftEngine.kt`) with identical formulas, thresholds, and config shapes, so results match desktop for the same collection. Building the forked backend into AnkiDroid to call TopicMastery directly is documented future work.
+- Parity specifics: mastery counts a card only when its current FSRS retrievability is **>= 0.9** (desktop's live path passes `mastered_threshold=0.0`, which the Rust backend maps to its default `0.9`); the readiness give-up rule uses **total graded reviews = sum of card `reps` over `deck:*`** (a card answered 10× counts as 10), matching `dashboard._total_graded_reviews`.
+- The AnkiDroid fork was built and installed on an Android emulator; the BrainLift Exam P coverage view renders on device.
+- Study content and BrainLift state (onboarding, diagnostic, coverage) arrive on mobile via Anki sync, so no separate content bundling is required on Android.
+
+## NEW: Two AI features (opt-in; deterministic fallback keeps everything working)
+
+Both features are behind a master toggle `brainlift_ai_enabled` (default OFF) and
+their formulas/constants are specified once in **`BRAINLIFT_AI_SPEC.md`** and
+mirrored identically in Python (`pylib/anki/brainlift/`) and Kotlin
+(`AnkiDroid/.../brainlift/`). Parity is enforced by
+`pylib/tests/test_brainlift_calibration.py`, `test_brainlift_fatigue.py`, and the
+Kotlin `BrainLiftParityTest`. All new state lives in collection config, so it
+**syncs both ways**.
+
+### Feature 1 — Metacognitive calibration ("confidence authority")
+- Files: `pylib/anki/brainlift/ai.py`, `calibration.py`; desktop UI
+  `qt/aqt/brainlift/calibration_dialog.py`; mobile `BrainLiftAi.kt`,
+  `BrainLiftCalibration.kt` + a WebView flow in `BrainLiftHtml/Activity`.
+- Flow: rate confidence on **15** cards (`CALIBRATION_TEST_SIZE`, path to 50 via
+  `CALIBRATION_PRODUCTION_SIZE`) → answer **15** AI-generated analog MCQs → score.
+- **What AI does:** generate a reworded / re-parameterized analog MCQ per card via
+  OpenAI (`gpt-4o-mini` default, configurable). **Every generated item records
+  `source_card_id` + `source_text`** (named-source traceability).
+- **Algorithm (headline):** `deviation_i = |confidence_i − performance_i|`;
+  `accuracy = 1 − mean(deviation)`; secondary `gamma` (Goodman-Kruskal resolution
+  between JOLs and accuracy). Confidence scale: Highly confident 1.0 / Confident
+  0.85 / Kind of confident 0.6 / Unsure 0.3 / Guessing 0.0.
+- **Confidence-authority multiplier:**
+  `authority = 0.25 + 0.75 * clamp((accuracy − 0.5)/0.5, 0, 1)` (range 0.25–1.0),
+  persisted to synced config and applied in the planner as
+  `effective_mastery_gap = 1 − mastered_fraction * authority` — well-calibrated
+  learners fully suppress mastered topics; poorly-calibrated learners keep review
+  coverage. Documented as a candidate **second Rust engine change** (a scheduling
+  weighting hook); implemented in the BrainLift scheduling layer for the MVP.
+
+### Feature 2 — Cognitive-load / fatigue offload (now a LEARNED model)
+- Files: `pylib/anki/brainlift/fatigue.py` + `qt/aqt/brainlift/fatigue_hooks.py`;
+  mobile `BrainLiftFatigue.kt` wired into `Reviewer.answerCardInner`. Offline
+  trainer + eval in `brainlift_eval/{fatigue_sim,train_fatigue_model,fatigue_model_eval}.py`.
+- **The drain DECISION is now a learned classifier.** A small, interpretable
+  **logistic regression** predicts `p(user is cognitively drained)` from five
+  research-grounded features: EWMA-smoothed normalized **slowdown, accuracy-drop,
+  RT-variability, post-error slowing**, plus **session-time position**. It is
+  trained **OFFLINE in Python**; its **weights ship as shared constants** so
+  desktop (Python) and mobile (Kotlin) run **byte-identical** inference
+  (`p = sigmoid(bias + w·features)`). Feature order + weights + threshold live in
+  `BRAINLIFT_AI_SPEC.md §5.5` and are copied verbatim into both engines.
+- **Training data — honest caveat:** there is no live student data, so the model
+  is trained on a **research-grounded SIMULATED** dataset whose effect sizes are
+  calibrated to three peer-reviewed papers (the model's **named source**):
+  Fortenbaugh et al. 2015 (*Psych Science*; vigilance decrement, RT slowing/variability),
+  Hanzal et al. 2024 (*PLOS ONE*, SART; state fatigue ↔ accuracy drop), and
+  Hassanzadeh-Behbaha et al. 2018 (*Frontiers Psych*; progressive RT slowing).
+  Per-user online adaptation on real streams is explicit **future work**.
+- **Learned probability replaces the fixed 0.60 threshold** as the intervention
+  trigger (decision threshold `MODEL_INTERVENE = 0.50`, severe `0.80`). The rest
+  of the machinery is unchanged: EWMA smoothing, 10-answer cooldown, ≥6-answers
+  minimum, the timing gate (TEST MODE / ~90 min / severe), sub-topic interleaving
+  + easier-by-FSRS-difficulty actions, and the **visible banner**.
+- **AI-OFF fallback:** the model runs only when the master toggle
+  `brainlift_ai_enabled` is ON (local weights, **no network/key** needed). With it
+  OFF — or on any model-load issue — the engine falls back cleanly to the original
+  **deterministic weighted-signal drain heuristic** (slowdown 0.40 / accuracy drop
+  0.30 / RT variability 0.15 / post-error 0.15, smoothed drain ≥ 0.60). Both paths
+  always produce a decision and the three scores; it never crashes or blocks scoring.
+- **Offline eval (`brainlift_eval/fatigue_model_eval.py`, wired into `run_all.py`):**
+  held-out **accuracy 0.9067 / AUC 0.9706 / log-loss 0.2914** on 600 disjoint
+  simulated sessions — clearing the **pre-declared** cutoff (accuracy ≥ 0.80 AND
+  AUC ≥ 0.85). **Beats the previous fixed-threshold heuristic** on the same
+  held-out set (heuristic accuracy 0.5283 / AUC 0.9242) and passes a **train/test
+  separation (leakage) check** (train seed 12345 vs test seed 98765; 0 overlapping
+  vectors). Kotlin==Python inference is asserted by `BrainLiftParityTest`.
+
+### AI robustness + eval
+- Key read **only** from `OPENAI_API_KEY` (never stored/committed). The OpenAI
+  client (desktop `requests`, mobile OkHttp — same REST call) wraps all network +
+  parsing in try/except and falls back to the deterministic generator
+  (`ok=false`); it never crashes and never blocks scoring.
+- Eval/proof harness: `brainlift_eval/` (see its README + committed `RESULTS.txt`) —
+  runs offline with no key (deterministic fixtures), `python3 run_all.py`. Latest run:
+  - **Held-out (20 items):** useful 85%, wrong 0% — **PASS** vs pre-declared cutoff
+    (wrong ≤10% AND useful ≥50%, decided before looking); failing items are blocked.
+  - **Gold set (50):** 38 correct-and-useful / 12 correct-but-bad-teaching / 0 wrong.
+  - **Baseline beat:** structured generator 33/50 valid re-parameterized analogs vs
+    keyword-retrieval baseline 0/50.
+  - **Leakage (served/post-gate set):** 0 true duplicates — CLEAN. Before any
+    analog is served, a **leakage gate** (regenerate-then-block, shared by desktop
+    `generate_gated_analog` and mobile `generateGatedAnalog`) checks each item;
+    true near-duplicates (near-verbatim question + identical answer, threshold
+    `LEAKAGE_SIM_THRESHOLD=0.9`) are **regenerated** up to `MAX_REGEN=3` times with
+    a stronger re-parameterize instruction, then **blocked/withheld** if still
+    leaking (same path as `wrong` items). The eval scans the served set and
+    honestly reports raw-leaked / caught-and-regenerated / blocked counts (offline:
+    0 / 0 / 0; the gate is what removes the occasional live-model copy — e.g. the
+    gpt-4o-mini leak on source card `m06`).
+  - **Paraphrase gap:** original-recall 84.9% vs analog-accuracy 57.9% → **26.9%** gap.
+  - **Fatigue model (Feature 2, learned):** held-out **accuracy 0.9067 / AUC 0.9706
+    / log-loss 0.2914** vs pre-declared cutoff (acc ≥ 0.80 AND AUC ≥ 0.85);
+    **beats** the old fixed-threshold heuristic (0.5283 / 0.9242) on the same
+    held-out set; train/test separation clean (0 overlap); the three named papers
+    are asserted present in the spec. `OVERALL: PASS`.
+  - **Named-source traceability:** every generated item carries `source_card_id` +
+    `source_text`; the harness asserts this.
+
+## Desktop ↔ mobile sync
+
+BrainLift state is stored in the Anki collection config and rides Anki's built-in collection sync; there is no custom merge — Anki's standard sync resolution applies (on divergence, a full sync prompts the user to keep one side; config is effectively last-writer-wins). Because all BrainLift state is stored in the collection config and standard notes/cards, it uses Anki's existing sync with no new transport. Onboarding profile, seeded/authored **cards**, and per-topic **coverage** created on one client therefore appear on the other after a normal sync.
+
+## Desktop installer (.dmg)
+
+The production macOS installer is produced with the repo's Briefcase-based tooling (`./tools/build-installer` / `RELEASE=2 ./ninja installer`). Because the seed content is a plain `.py` module inside the `anki` wheel, it is included in the installer automatically.
+
+---
+
+## Build & test verification (this change)
+
+- **pylib tests:** `36 passed` — all `pylib/tests/test_brainlift_*.py`, including the new `test_brainlift_default_content.py` (seeds >0 on empty col, tags cover all three Exam P main topics, second run adds 0 / idempotent, and seeds nothing when the collection already has a card).
+- **Wheel build:** `./ninja wheels` succeeds; the built `anki-26.5-*.whl` contains `anki/brainlift/examp_seed.py`, `default_content.py`, and `exam_p.py`. Loading `SEED_CARDS` straight from the wheel yields **437** cards (229 / 198 / 10).
+
+See `anki/anki-brainlift-TESTING.md` for exact reproduction commands.
+
+---
+
+## Files added / changed in this batch
+
+**New (ships in the `anki` wheel):**
+- `pylib/anki/brainlift/examp_seed.py` — generated SOA Exam P seed data (437 cards).
+- `pylib/anki/brainlift/default_content.py` — `maybe_seed_default_deck()` seeder.
+- `pylib/tests/test_brainlift_default_content.py` — seeder tests.
+
+**Modified (additive only):**
+- `qt/aqt/brainlift/__init__.py` — seed default content once on `profile_did_open` (`_seed_and_land`), then land on the BrainLift home.
+- `anki-analysis/build_examp_deck.py` — added `--emit-seed` to emit the pure-Python seed module from the validated `.apkg` (same sourced SOA content).
+
+**Docs:** this summary and `anki/anki-brainlift-TESTING.md`.
+
+No existing Anki behaviour was removed; the feature is strictly additive and deterministic.

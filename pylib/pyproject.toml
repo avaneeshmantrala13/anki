@@ -28,6 +28,10 @@ dependencies = [
   "distro; sys_platform != 'darwin' and sys_platform != 'win32'",
 ]
 
+# BrainLift AI uses the OpenAI chat-completions REST API via `requests` (already
+# a core dependency), mirroring the mobile OkHttp call, so no extra SDK is
+# required. The key is read only from the OPENAI_API_KEY environment variable.
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

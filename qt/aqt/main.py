@@ -1448,6 +1448,11 @@ title="{}" {}>{}</button>""".format(
         qconnect(m.action_check_for_updates.triggered, self.on_check_for_updates)
         qconnect(m.actionPreferences.triggered, self.onPrefs)
 
+        # BrainLift: additive Tools-menu entry for the Exam P dashboard.
+        from aqt import brainlift
+
+        brainlift.setup_menu(self)
+
         # View
         qconnect(
             m.actionZoomIn.triggered,
