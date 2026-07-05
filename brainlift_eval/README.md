@@ -20,6 +20,7 @@ python3 run_eval.py        # held-out eval with pre-declared pass/fail cutoff
 python3 gold_eval.py       # 50-card gold-set bucket counts
 python3 baseline.py        # structured/AI generator vs keyword baseline
 python3 leakage_check.py   # near-duplicate / leakage scan vs the gold set
+python3 prompt_injection_check.py  # prompt-injection resistance (Feature 1)
 python3 paraphrase_gap.py  # original-recall vs analog-accuracy gap
 python3 fatigue_model_eval.py    # Feature 2 LEARNED fatigue model: held-out acc/AUC/log-loss
 python3 train_fatigue_model.py   # (re)train the Feature 2 model offline; prints shipped weights
@@ -35,6 +36,7 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 | `gold_eval.py` | Gold set of 50 Q/A run through the checker | Buckets all 50 into correct-and-useful / wrong / correct-but-bad-teaching. |
 | `baseline.py` | AI beats a simpler baseline at valid analogs | Structured generator vs a keyword-retrieval baseline; metric = valid re-parameterized analogs. |
 | `leakage_check.py` | Leakage scan is clean | Scans the **served (post-gate) set**. The generation pipeline runs a leakage gate (regenerate-then-block); this check flags an analog only when it is near-verbatim **and** resolves to the same answer as a gold item, and reports how many raw items leaked / were caught-and-regenerated / were blocked. |
+| `prompt_injection_check.py` | **Prompt-injection resistance** (source content is interpolated into the prompt) | Feeds NAMED injection payloads embedded in source-card text through the generator and asserts the served output ignores them (valid MCQ, no system-prompt leak, no instruction-following); also proves a simulated **compromised** model is BLOCKED by the validator (`validate_analog`). |
 | `paraphrase_gap.py` | Performance != memory | Compares original-card recall vs reworded-analog accuracy over 30 cards. |
 | `fatigue_model_eval.py` | **Feature 2 learned model** meets the AI bar | Held-out **accuracy / AUC / log-loss** of the SHIPPED logistic-regression fatigue model vs a **pre-declared** cutoff (acc ≥ 0.80 AND AUC ≥ 0.85); **baseline beat** vs the previous fixed-threshold heuristic on the same held-out set; **train/test separation (leakage) check**; asserts the three named papers are documented. |
 | `train_fatigue_model.py` | Offline training is reproducible | Trains the logistic regression (pure-Python GD, fixed seed) on research-grounded simulated sessions and prints the shipped bias/weights verbatim. |
@@ -57,6 +59,15 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 - **Leakage** is defined as true free-answer leakage (near-verbatim wording **and**
   identical answer), not mere phrasing similarity — a genuine analog is expected to
   share concept phrasing with the source while changing the numbers/answer.
+- **Prompt-injection defense (shared logic):** source card text is untrusted DATA
+  interpolated into the prompt, so (1) the prompt strongly delimits it and forbids
+  following instructions inside it, (2) `anki.brainlift.ai.validate_analog`
+  (mirrored in Kotlin `BrainLiftAi.validateAnalog`) rejects any output that fails
+  the MCQ schema, echoes injection markers / our system prompt, or leaks the
+  answer into the stem, and (3) `generate_gated_analog` regenerates-then-blocks a
+  still-failing item while `RealOpenAIClient` also rejects an injected output in
+  favour of the clean deterministic fallback on every call. Proven by
+  `prompt_injection_check.py` and `pylib/tests/test_brainlift_prompt_injection.py`.
 - **Leakage gate (regenerate-then-block):** before any analog is served, the
   generation pipeline (`anki.brainlift.ai.generate_gated_analog`, mirrored in
   Kotlin `BrainLiftAi.generateGatedAnalog`) checks each item for leakage. Leaked
@@ -80,6 +91,7 @@ Latest committed run output is in [`RESULTS.txt`](./RESULTS.txt).
 - Gold set (50): 38 correct-and-useful / 12 correct-but-bad-teaching / 0 wrong
 - Baseline: structured 33/50 valid analogs vs keyword baseline 0/50 -> **structured BEATS**
 - Leakage (served/post-gate set): 0 true duplicates -> **CLEAN** (0 raw-leaked, 0 regenerated, 0 blocked offline; the gate catches live-model leaks)
+- Prompt-injection: 5/5 adversarial source cards yield a clean served MCQ; 5/5 simulated compromised outputs BLOCKED -> **PASS**
 - Paraphrase gap: original 84.9% vs analog 57.9% -> **26.9% gap**
 - Fatigue model (Feature 2, learned): held-out **acc 0.9067 / AUC 0.9706 / log-loss 0.2914** -> **PASS** (pre-declared acc >=0.80, AUC >=0.85); **beats** fixed-threshold heuristic (0.5283 / 0.9242); train/test separation clean (0 overlap)
 

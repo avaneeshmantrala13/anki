@@ -17,6 +17,7 @@ import fatigue_model_eval
 import gold_eval
 import leakage_check
 import paraphrase_gap
+import prompt_injection_check
 import run_eval
 
 
@@ -28,6 +29,7 @@ def main() -> int:
         ("gold_eval", lambda: gold_eval.run(live)),
         ("baseline_comparison", lambda: baseline.run(live)),
         ("leakage_check", lambda: leakage_check.run(live)),
+        ("prompt_injection_check", lambda: prompt_injection_check.run(live)),
         ("paraphrase_gap", paraphrase_gap.run),
         ("fatigue_model_eval", lambda: fatigue_model_eval.run(live)),
     ]:
