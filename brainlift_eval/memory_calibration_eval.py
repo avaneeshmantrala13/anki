@@ -27,21 +27,40 @@ PASS cutoff (DECLARED UP FRONT, before looking at any result):
 DATA DISCLOSURE — THE REVIEW OUTCOMES ARE **SIMULATED**, NOT A REAL REVIEW LOG.
 ------------------------------------------------------------------------------
 BrainLift ships without a large real review history to mine, so this eval
-generates a synthetic-but-FSRS-grounded review set:
+generates a synthetic-but-FSRS-grounded review set.
 
-  1. Each simulated card is given an FSRS memory *stability* S (days) drawn from
-     a log-uniform range, and an *elapsed* time t (days) since its last review.
-  2. The MODEL's predicted recall is the exact FSRS-5 power forgetting curve
+**Why this eval is now NON-CIRCULAR.** An earlier version of this file set the
+predicted recall to ``true_p + small_noise`` — i.e. the "prediction" was just
+the ground truth with a jitter added. That makes the reliability diagram tautological:
+of course a copy of the truth is well-calibrated. It tested nothing.
+
+This version predicts recall from an **independent estimator** that never sees
+the card's true stability. It only sees PAST review outcomes and must infer the
+memory model from them, exactly like a real scheduler would:
+
+  1. Each simulated card is given a hidden, TRUE FSRS memory *stability*
+     ``S_true`` (days), drawn log-uniformly. This is the generative truth and is
+     never shown to the estimator.
+  2. A per-card PAST review history is simulated: several reviews at varied
+     elapsed times, whose pass/fail outcomes are Bernoulli draws from the TRUE
+     FSRS-5 forgetting curve
          R(t) = (1 + FACTOR * t / S) ** DECAY,  DECAY = -0.5, FACTOR = 19/81
-     — the same formula the Rust engine uses (see rslib .. topic_mastery.rs and
-     the `fsrs` crate `current_retrievability`).
-  3. The ground-truth recall probability is that SAME FSRS curve computed from
-     the card's TRUE stability, then perturbed by a small, bounded amount of
-     "model error" so the two are not trivially identical (this makes the
-     reliability diagram non-degenerate and honest).
-  4. The observed outcome y in {0,1} is a Bernoulli draw from the ground-truth
-     probability. "Correct" == recalled == ease > 1 (i.e. any grade above
-     Again), matching how BrainLift treats a successful review.
+     evaluated at ``S_true`` (the same formula the Rust engine uses — see
+     rslib .. topic_mastery.rs and the `fsrs` crate `current_retrievability`).
+  3. The ESTIMATOR fits a stability ``S_hat`` by maximum likelihood over the
+     PAST outcomes ONLY (a deterministic grid search; §``_estimate_stability``).
+     It has no access to ``S_true`` — its only information is the past pass/fail
+     record, so its error is genuine estimation error, not injected noise.
+  4. The MODEL's predicted recall for a FUTURE, held-out review at elapsed time
+     ``t_future`` is ``R(t_future, S_hat)`` — produced purely from the estimator.
+  5. The observed FUTURE outcome ``y`` in {0,1} is an INDEPENDENT Bernoulli draw
+     from the TRUE curve ``R(t_future, S_true)``. "Correct" == recalled == a grade
+     above Again, matching how BrainLift treats a successful review.
+
+Because the prediction (from past data via ``S_hat``) and the future outcome
+(from ``S_true``) are produced by separate paths, the reliability diagram now
+tests whether the estimator's stated probabilities match reality — a real
+calibration test, not an echo of the truth.
 
 Everything is deterministic given the seeds below (a HELD-OUT test pool built
 from TEST_SEED, disjoint from the TRAIN_SEED pool). Re-running reproduces the
@@ -68,9 +87,18 @@ TEST_N = 4000
 DECAY = -0.5
 FACTOR = 19.0 / 81.0
 
-# Bounded model-error on the predicted probability (see disclosure #3). Keeps
-# the eval honest: predictions are close to, but not identical to, truth.
-MODEL_ERROR_SD = 0.06
+# Per-card PAST review history the estimator is allowed to learn from. More
+# past reviews -> a sharper S_hat; this range keeps estimation error realistic
+# (a real card has only a handful of prior reviews to learn from).
+MIN_PAST_REVIEWS = 3
+MAX_PAST_REVIEWS = 12
+
+# Maximum-likelihood grid the estimator searches over (log-space stability, in
+# days). The estimator picks the grid stability that best explains the PAST
+# outcomes; it never sees the true stability.
+FIT_GRID_LO_DAYS = 0.25
+FIT_GRID_HI_DAYS = 1460.0
+FIT_GRID_POINTS = 96
 
 N_BINS = 10
 
@@ -90,29 +118,82 @@ def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-def make_pool(n: int, seed: int) -> tuple[list[float], list[int]]:
-    """Build a simulated review pool.
+# Pre-computed log-space stability grid the estimator searches (days).
+_FIT_GRID = [
+    math.exp(
+        math.log(FIT_GRID_LO_DAYS)
+        + (math.log(FIT_GRID_HI_DAYS) - math.log(FIT_GRID_LO_DAYS)) * i / (FIT_GRID_POINTS - 1)
+    )
+    for i in range(FIT_GRID_POINTS)
+]
 
-    Returns ``(predicted, actual)`` where ``predicted[i]`` is the Memory model's
-    FSRS recall probability and ``actual[i]`` in {0,1} is the observed outcome.
+
+def _estimate_stability(
+    past_times: list[float], past_outcomes: list[int]
+) -> float:
+    """Independent MLE of FSRS stability from PAST outcomes only.
+
+    Returns the grid stability ``S_hat`` maximizing the Bernoulli likelihood of
+    the observed past pass/fail record under the FSRS forgetting curve. This
+    estimator has NO access to the card's true stability — its sole input is the
+    past review history — so the recall it later predicts is a genuine estimate,
+    not a copy of the truth.
+    """
+    eps = 1e-9
+    best_s = _FIT_GRID[0]
+    best_ll = -float("inf")
+    for s in _FIT_GRID:
+        ll = 0.0
+        for t, y in zip(past_times, past_outcomes):
+            p = min(1.0 - eps, max(eps, fsrs_retrievability(t, s)))
+            ll += math.log(p) if y else math.log(1.0 - p)
+        if ll > best_ll:
+            best_ll = ll
+            best_s = s
+    return best_s
+
+
+def make_pool(n: int, seed: int) -> tuple[list[float], list[int]]:
+    """Build a simulated review pool using an INDEPENDENT recall estimator.
+
+    Returns ``(predicted, actual)`` where ``predicted[i]`` is the estimator's
+    predicted recall for a held-out FUTURE review (derived only from the card's
+    PAST outcomes) and ``actual[i]`` in {0,1} is the independently drawn future
+    outcome (from the card's hidden TRUE stability). The two come from separate
+    paths, so calibration here is a real test of the estimator (see header).
     """
     rng = random.Random(seed)
     predicted: list[float] = []
     actual: list[int] = []
     for _ in range(n):
-        # Log-uniform stability from ~1 day to ~365 days.
-        stability = math.exp(rng.uniform(math.log(1.0), math.log(365.0)))
-        # Elapsed time as a log-uniform multiple of stability, chosen wide
-        # enough (t/S up to ~500) that predicted recall R spans the full [0,1]
-        # range and every reliability bin is populated.
-        ratio = math.exp(rng.uniform(math.log(0.02), math.log(500.0)))
-        elapsed = stability * ratio
+        # Hidden TRUE stability (log-uniform, ~1..365 days). Never shown to the
+        # estimator; used only to generate outcomes.
+        s_true = math.exp(rng.uniform(math.log(1.0), math.log(365.0)))
 
-        true_p = _clamp01(fsrs_retrievability(elapsed, stability))
-        # Model's prediction = truth + small bounded error (disclosure #3).
-        pred_p = _clamp01(true_p + rng.gauss(0.0, MODEL_ERROR_SD))
+        # --- simulate a PAST review history and draw its outcomes from truth ---
+        k = rng.randint(MIN_PAST_REVIEWS, MAX_PAST_REVIEWS)
+        past_times: list[float] = []
+        past_outcomes: list[int] = []
+        for _ in range(k):
+            ratio = math.exp(rng.uniform(math.log(0.05), math.log(20.0)))
+            t_past = s_true * ratio
+            p_true_past = _clamp01(fsrs_retrievability(t_past, s_true))
+            past_times.append(t_past)
+            past_outcomes.append(1 if rng.random() < p_true_past else 0)
 
-        y = 1 if rng.random() < true_p else 0
+        # --- estimator infers S_hat from the PAST outcomes ONLY ---------------
+        s_hat = _estimate_stability(past_times, past_outcomes)
+
+        # --- held-out FUTURE review: predict from S_hat, observe from S_true --
+        # Future elapsed time spans a wide log-uniform range so predicted recall
+        # covers the whole [0,1] axis and every reliability bin is populated.
+        future_ratio = math.exp(rng.uniform(math.log(0.02), math.log(500.0)))
+        t_future = s_true * future_ratio
+
+        pred_p = _clamp01(fsrs_retrievability(t_future, s_hat))  # from estimate
+        true_future_p = _clamp01(fsrs_retrievability(t_future, s_true))  # truth
+        y = 1 if rng.random() < true_future_p else 0
+
         predicted.append(pred_p)
         actual.append(y)
     return predicted, actual
@@ -191,7 +272,8 @@ def _write_artifacts(bins: list[dict], brier: float, ll: float, ece: float) -> N
 
 def _render_table(bins: list[dict], brier: float, ll: float, ece: float) -> str:
     out: list[str] = []
-    out.append("Memory calibration — reliability diagram (SIMULATED, FSRS-grounded)")
+    out.append("Memory calibration — reliability diagram "
+               "(SIMULATED; independent MLE estimator, non-circular)")
     out.append("")
     out.append(f"  {'bin':>11}  {'n':>6}  {'predicted':>9}  {'observed':>9}  diagram")
     out.append("  " + "-" * 60)
@@ -227,11 +309,15 @@ def run(live: bool = False) -> bool:
 
     _write_artifacts(bins, brier, ll, ece)
 
-    print("== Memory calibration — FSRS predicted recall vs actual outcome ==")
+    print("== Memory calibration — estimator recall vs actual outcome ==")
     print("data: SIMULATED, FSRS-5-grounded (NOT a real review log) — see header")
+    print("prediction: INDEPENDENT MLE estimator (fit on PAST outcomes only), "
+          "NOT truth+noise")
     print(f"held-out reviews: {len(actual)} (seed={TEST_SEED}); "
           f"train reviews: {len(train_pred)} (seed={TRAIN_SEED})")
-    print(f"FSRS curve: R(t) = (1 + {FACTOR:.6f}*t/S)^{DECAY}")
+    print(f"FSRS curve: R(t) = (1 + {FACTOR:.6f}*t/S)^{DECAY}  "
+          f"(S estimated over {FIT_GRID_POINTS}-pt grid, "
+          f"{MIN_PAST_REVIEWS}-{MAX_PAST_REVIEWS} past reviews/card)")
     print()
     print(_render_table(bins, brier, ll, ece), end="")
     print()
