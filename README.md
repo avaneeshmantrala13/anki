@@ -92,6 +92,44 @@ check on the served/post-gate set, paraphrase gap) and runs offline with no key.
 - **Desktop (this repo):** `./run`
 - **Mobile (AnkiDroid fork):** `./gradlew assemblePlayDebug`
 
+### Prerequisites / toolchain
+
+BrainLift adds no build tooling of its own — it builds with each upstream app's
+standard toolchain. Only prerequisites confirmed from this repo's build scripts
+are listed; for anything version-specific not pinned here, follow the upstream
+build docs.
+
+**Desktop (this repo)** — see [`docs/development.md`](./docs/development.md) and
+the per-OS notes ([mac](./docs/mac.md) / [linux](./docs/linux.md) /
+[windows](./docs/windows.md)):
+
+- **Rust** via [rustup](https://rustup.rs/); the pinned toolchain in
+  [`rust-toolchain.toml`](./rust-toolchain.toml) (currently `1.92.0`) is fetched
+  automatically.
+- **N2 or Ninja** — install N2 with [`tools/install-n2`](./tools/install-n2).
+- **Python, Node, protoc, and Yarn are downloaded automatically by the build**
+  (Python is pinned by [`.python-version`](./.python-version), currently
+  `3.13.13`; dependencies are locked in `uv.lock` / `yarn.lock`). To use
+  locally-installed versions instead, set `PYTHON_BINARY`, `NODE_BINARY`,
+  `YARN_BINARY`, and/or `PROTOC_BINARY`.
+- A platform C/C++ toolchain, `git`, and `rsync` (Xcode command-line tools on
+  macOS; `gcc`/`g++`/`make` on Linux). Optional: `mpv` + `lame` for audio.
+- Optional: the [`just`](https://just.systems/) command runner (`brew install
+  just` or `uv tool install just`).
+
+**Mobile (AnkiDroid fork)** — build with the Gradle wrapper (`./gradlew`), which
+provisions Gradle itself. Confirmed from `build.gradle.kts`:
+
+- **JDK 21** — the build requires a JVM in the 21–25 range and pins the Gradle
+  daemon to JDK 21.
+- **Android SDK** — configured via `local.properties` (`sdk.dir`) or the
+  `ANDROID_HOME` environment variable (Android Studio installs both).
+- This fork links the *stock, published* Anki backend, so **no Rust toolchain or
+  Android NDK is required** to build it. (Compiling the Rust backend into
+  AnkiDroid — documented future work — would additionally need the Android NDK
+  and `cargo-ndk`; see the upstream
+  [AnkiDroid development docs](https://github.com/ankidroid/Anki-Android/wiki/Development-Guide).)
+
 Upstream Anki's original README follows below. License files are unchanged.
 
 <!-- END BrainLift fork additions -->
