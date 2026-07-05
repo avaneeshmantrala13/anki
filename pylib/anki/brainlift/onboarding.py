@@ -102,7 +102,7 @@ def _recommendation(mode: str) -> str:
     if mode == DURABLE:
         return (
             "You have enough time to study for durable, long-term mastery. "
-            "Follow the full study plan and review consistently."
+            "Review consistently to stay on track."
         )
     if mode == TIGHT:
         return (

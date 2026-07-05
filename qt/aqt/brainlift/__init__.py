@@ -235,8 +235,8 @@ def _do_gate(mw: AnkiQt) -> None:
         box.setText("Finish your BrainLift setup first")
         box.setInformativeText(
             "BrainLift needs your exam date and goal before your first review so it "
-            "can build an honest study plan and readiness estimate. It takes about a "
-            "minute — or you can skip for now."
+            "can build an honest readiness estimate. It takes about a minute — or "
+            "you can skip for now."
         )
         setup_btn = box.addButton("Set up now", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("Skip for now", QMessageBox.ButtonRole.RejectRole)

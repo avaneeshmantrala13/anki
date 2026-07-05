@@ -7,8 +7,7 @@ Aggregates every deterministic signal into one view-model and renders it as a
 self-contained HTML page for the desktop GUI:
 
 * the three separate measurements (Memory / Performance / Readiness),
-* Exam P topic coverage and weakest topics,
-* the rule-based study plan, and
+* Exam P topic coverage and weakest topics, and
 * a projected progress timeline (today / 30d / 60d / exam day).
 
 Readiness honours the give-up rule and shows "Not enough data" with the missing
@@ -212,21 +211,6 @@ def _coverage_rows(coverage: exam_p.CoverageReport) -> str:
     return rows
 
 
-def _plan_rows(plan: planner.StudyPlan) -> str:
-    rows = ""
-    for p in plan.priorities:
-        reasons = "; ".join(html.escape(r) for r in p.reasons)
-        rows += (
-            "<tr>"
-            f"<td>{html.escape(p.topic_name)}</td>"
-            f"<td>{p.score:.2f}</td>"
-            f"<td>{p.recommended_hours:g}h/wk</td>"
-            f"<td class='reasons'>{reasons}</td>"
-            "</tr>"
-        )
-    return rows
-
-
 def _timeline_rows(timeline: list[Milestone]) -> str:
     cells = ""
     for m in timeline:
@@ -258,34 +242,53 @@ DASHBOARD_CSS = """
     --bl-primary: #4f6bed;
     --bl-warn: #b3590a;
     --bl-shadow-card: 0 1px 2px rgba(18,22,45,.05), 0 1px 6px rgba(18,22,45,.04);
+    /* Distinctive type pairing (offline-safe: real system faces first, then
+       graceful web fallbacks). Display for headings/figures, a clean humanist
+       body face, and a mono for the little uppercase labels + numerals. */
+    --bl-font-display: "Avenir Next", "Futura", "Gill Sans",
+                       "Segoe UI Variable Display", "Trebuchet MS",
+                       -apple-system, sans-serif;
+    --bl-font-body: "Avenir Next", "Inter", "Segoe UI", Roboto,
+                    "Helvetica Neue", Arial, sans-serif;
+    --bl-font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo,
+                    Consolas, monospace;
+    /* Signature cyan glow that sits behind every box. */
+    --bl-cyan: #22d3ee;
+    --bl-glow: 0 6px 22px rgba(34,211,238,.13), 0 0 0 1px rgba(34,211,238,.10);
+    --bl-glow-strong: 0 10px 30px rgba(34,211,238,.26),
+                      0 0 0 1px rgba(34,211,238,.30);
   }
   html.night-mode, body.nightMode {
-    --bl-bg: #13151c;
-    --bl-surface: #1c1f29;
-    --bl-surface-2: #262b38;
-    --bl-border: #2c3140;
-    --bl-row-line: #262b37;
+    --bl-bg: #0f1420;
+    --bl-surface: #161c2b;
+    --bl-surface-2: #202940;
+    --bl-border: #263149;
+    --bl-row-line: #202940;
     --bl-text: #e8eaf3;
     --bl-text-2: #a4aabc;
     --bl-text-3: #737990;
     --bl-primary: #7387f2;
     --bl-warn: #e09a4e;
     --bl-shadow-card: 0 1px 2px rgba(0,0,0,.4);
+    --bl-glow: 0 6px 24px rgba(34,211,238,.16), 0 0 0 1px rgba(34,211,238,.16);
+    --bl-glow-strong: 0 12px 34px rgba(34,211,238,.34),
+                      0 0 0 1px rgba(34,211,238,.44);
   }
-  body { font-family: -apple-system, "Segoe UI Variable", "Segoe UI", Roboto,
-          "Helvetica Neue", Arial, sans-serif; margin: 0;
+  body { font-family: var(--bl-font-body); margin: 0;
           padding: 20px; background: var(--bl-bg); color: var(--bl-text);
           -webkit-font-smoothing: antialiased; }
-  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.01em; }
+  h1 { font-family: var(--bl-font-display); font-size: 23px; margin: 0 0 4px;
+       letter-spacing: -.01em; }
   .mode { color: var(--bl-text-2); margin-bottom: 16px; font-size: 13px; }
   .cards { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 24px; }
-  .card { background: var(--bl-surface); border-radius: 12px; padding: 16px 18px;
+  .card { background: var(--bl-surface); border-radius: 16px; padding: 16px 18px;
            flex: 1; min-width: 220px; border: 1px solid var(--bl-border);
-           box-shadow: var(--bl-shadow-card); }
-  .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
-                 color: var(--bl-text-3); font-weight: 600; margin-bottom: 8px; }
-  .big { font-size: 32px; font-weight: 700; letter-spacing: -.02em;
-         font-variant-numeric: tabular-nums; }
+           box-shadow: var(--bl-glow); }
+  .card-title { font-family: var(--bl-font-mono); font-size: 11px;
+                 text-transform: uppercase; letter-spacing: .08em;
+                 color: var(--bl-cyan); font-weight: 600; margin-bottom: 8px; }
+  .big { font-family: var(--bl-font-display); font-size: 33px; font-weight: 700;
+         letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
   .big.muted { font-size: 20px; font-weight: 600; color: var(--bl-text-3);
                letter-spacing: 0; }
   .range { color: var(--bl-text-2); font-size: 13px; margin-top: 2px;
@@ -295,28 +298,31 @@ DASHBOARD_CSS = """
   ul.evidence, ul.missing { margin: 4px 0 0; padding-left: 18px; font-size: 12px;
                              color: var(--bl-text-2); line-height: 1.6; }
   ul.missing li { color: var(--bl-warn); }
-  h2 { font-size: 15px; margin: 26px 0 8px; letter-spacing: -.01em; }
+  h2 { font-family: var(--bl-font-display); font-size: 16px; margin: 26px 0 8px;
+       letter-spacing: -.01em; }
   table { width: 100%; border-collapse: separate; border-spacing: 0;
            background: var(--bl-surface); border: 1px solid var(--bl-border);
-           border-radius: 12px; overflow: hidden;
-           box-shadow: var(--bl-shadow-card); }
+           border-radius: 16px; overflow: hidden;
+           box-shadow: var(--bl-glow); }
   th, td { text-align: left; padding: 10px 14px; font-size: 13px;
             border-bottom: 1px solid var(--bl-row-line);
             font-variant-numeric: tabular-nums; }
   tr:last-child td { border-bottom: none; }
   th { background: var(--bl-surface-2); color: var(--bl-text-3);
-       font-weight: 600; font-size: 11px; text-transform: uppercase;
-       letter-spacing: .06em; }
+       font-family: var(--bl-font-mono); font-weight: 600; font-size: 11px;
+       text-transform: uppercase; letter-spacing: .07em; }
   td.reasons { color: var(--bl-text-2); font-size: 12px; }
   ul { line-height: 1.6; }
   .timeline { display: flex; gap: 12px; }
-  .milestone { background: var(--bl-surface); border-radius: 12px; padding: 14px;
+  .milestone { background: var(--bl-surface); border-radius: 16px; padding: 14px;
                 flex: 1; text-align: center; border: 1px solid var(--bl-border);
-                box-shadow: var(--bl-shadow-card); }
-  .ms-label { font-size: 11px; color: var(--bl-text-3); font-weight: 600;
-              text-transform: uppercase; letter-spacing: .06em; }
-  .ms-val { font-size: 26px; font-weight: 700; margin: 4px 0;
-            letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+                box-shadow: var(--bl-glow); }
+  .ms-label { font-family: var(--bl-font-mono); font-size: 11px;
+              color: var(--bl-cyan); font-weight: 600;
+              text-transform: uppercase; letter-spacing: .07em; }
+  .ms-val { font-family: var(--bl-font-display); font-size: 27px; font-weight: 700;
+            margin: 4px 0; letter-spacing: -.02em;
+            font-variant-numeric: tabular-nums; }
   .ms-cap { font-size: 11px; color: var(--bl-text-3); }
   .note { font-size: 11px; color: var(--bl-text-3); margin-top: 8px; }
 """
@@ -360,13 +366,6 @@ def render_body(d: Dashboard, heading: str = "BrainLift — Exam P Dashboard") -
     {_readiness_card(d.readiness)}
   </div>
 
-  <h2>Study plan</h2>
-  <div class="mode">{html.escape(d.plan.summary)}</div>
-  <table>
-    <tr><th>Topic</th><th>Priority</th><th>Weekly time</th><th>Why</th></tr>
-    {_plan_rows(d.plan)}
-  </table>
-
   <h2>Topic coverage</h2>
   <table>
     <tr><th>Topic</th><th>Weight</th><th>Cards</th><th>Reviewed</th>
@@ -377,7 +376,7 @@ def render_body(d: Dashboard, heading: str = "BrainLift — Exam P Dashboard") -
   <h2>Weakest topics</h2>
   <ul>{weak}</ul>
 
-  <h2>Projected mastery (if you follow the plan)</h2>
+  <h2>Projected mastery (if you keep studying)</h2>
   <div class="timeline">{_timeline_rows(d.timeline)}</div>
   <div class="note">Deterministic estimate based on your weekly study hours — not a guarantee, and not AI-generated.</div>
 

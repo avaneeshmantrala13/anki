@@ -186,7 +186,7 @@ class DiagnosticDialog(QDialog):
             f"Average time: {result.avg_time_seconds:g}s per question<br>"
             f"Weakest topics: {weak}<br>"
             f"{calib}<br><br>"
-            f"Your study plan now reflects these results.",
+            f"Your readiness estimate now reflects these results.",
             parent=self,
             title="BrainLift",
             textFormat="rich",
